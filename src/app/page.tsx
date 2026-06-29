@@ -10,500 +10,627 @@ import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Brush, Eraser, PaintBucket, Square, Grid3x3, Save, FolderOpen,
-  Download, Upload, Trash2, Undo2, Redo2, Play, Hand, Map as MapIcon
+  Download, Upload, Trash2, Undo2, Redo2, Hand, Map as MapIcon,
+  Play, Pause, Home, Hammer, Sword, Coins, Skull, Trophy, Eye,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import {
+  TERRAIN, TILE_SIZE, drawTerrain, drawBuilding, drawUnit, drawWorm,
+  drawHealthBar, drawSelectionRing, drawMoveMarker,
+  getTilePreview, getBuildingPreview, getUnitPreview,
+  FACTION_COLORS, type Faction, type BuildingType, type UnitType,
+} from '@/lib/tile-renderer'
+import {
+  createGame, tick, CONFIG, BUILD_COSTS, type GameState, type Unit, type Building,
+  canBuild, placeBuilding, queueUnit, commandMove, commandAttack,
+  idx, isWalkable, isBuildable, buildingAt, dist, inBounds,
+  typeRu, unitName, bldName, factionRu,
+} from '@/lib/game-engine'
 
-// ---------- Tile definitions ----------
-type Tool = 'brush' | 'eraser' | 'fill' | 'rect' | 'pan'
+// ============================================================
+//  EDITOR
+// ============================================================
+type Tool = 'brush' | 'eraser' | 'fill' | 'rect'
 
-interface TileDef {
-  id: number
-  name: string
-  color: string
-  icon: string
-  category: 'terrain' | 'resource' | 'building' | 'unit'
-  walkable: boolean
-}
-
-const TILES: TileDef[] = [
-  { id: 0,  name: 'Пустота',      color: '#0a0a0a', icon: '∅', category: 'terrain',  walkable: false },
-  { id: 1,  name: 'Песок',        color: '#d9a441', icon: '·', category: 'terrain',  walkable: true  },
-  { id: 2,  name: 'Дюны',         color: '#b8842e', icon: '≈', category: 'terrain',  walkable: true  },
-  { id: 3,  name: 'Скала',        color: '#6b6b6b', icon: '▲', category: 'terrain',  walkable: false },
-  { id: 4,  name: 'Горы',         color: '#3d3d3d', icon: '▲', category: 'terrain',  walkable: false },
-  { id: 5,  name: 'Спайс',        color: '#e85d2f', icon: '✦', category: 'resource', walkable: true  },
-  { id: 6,  name: 'Спайс (богатый)', color: '#c43d1a', icon: '✸', category: 'resource', walkable: true },
-  { id: 7,  name: 'Вода',         color: '#2b7a9e', icon: '≈', category: 'terrain',  walkable: false },
-  { id: 8,  name: 'Дворец',       color: '#8b1a1a', icon: '♔', category: 'building', walkable: false },
-  { id: 9,  name: 'База Атрейдес', color: '#1a4d8b', icon: '⌂', category: 'building', walkable: false },
-  { id: 10, name: 'База Харконнен', color: '#5b1a8b', icon: '⌂', category: 'building', walkable: false },
-  { id: 11, name: 'База Ордос',   color: '#1a8b4d', icon: '⌂', category: 'building', walkable: false },
-  { id: 12, name: 'Казармы',      color: '#7a5c3a', icon: '▤', category: 'building', walkable: false },
-  { id: 13, name: 'Турель',       color: '#4a4a4a', icon: '◉', category: 'building', walkable: false },
-  { id: 14, name: 'Солдат',       color: '#d9d9d9', icon: '♙', category: 'unit',     walkable: true  },
-  { id: 15, name: 'Танк',         color: '#5a5a5a', icon: '▣', category: 'unit',     walkable: true  },
-  { id: 16, name: 'Червь',        color: '#8b4513', icon: '〜', category: 'unit',     walkable: false },
-  { id: 17, name: 'Доставщик',    color: '#e0c060', icon: '◆', category: 'unit',     walkable: true  },
+const TERRAIN_LIST = Object.values(TERRAIN)
+const EDITOR_TILES = [
+  { id: 0, cat: 'terrain' }, { id: 1, cat: 'terrain' }, { id: 2, cat: 'terrain' },
+  { id: 3, cat: 'terrain' }, { id: 4, cat: 'terrain' }, { id: 5, cat: 'terrain' },
+  { id: 6, cat: 'terrain' }, { id: 7, cat: 'terrain' },
 ]
-
-const TILE_MAP = new Map(TILES.map(t => [t.id, t]))
-const CATEGORIES = ['terrain', 'resource', 'building', 'unit'] as const
 const CATEGORY_LABELS: Record<string, string> = {
   terrain: 'Рельеф', resource: 'Ресурсы', building: 'Здания', unit: 'Юниты'
 }
 
-const DEFAULT_W = 48
-const DEFAULT_H = 48
-const TILE_PX = 16
-
-// ---------- Helpers ----------
 function emptyGrid(w: number, h: number): number[] {
-  return new Array(w * h).fill(1) // sand by default
+  return new Array(w * h).fill(1)
 }
 
-function floodFill(grid: number[], w: number, h: number, x: number, y: number, target: number, replacement: number): number[] {
-  if (target === replacement) return grid
-  const result = [...grid]
-  const stack = [[x, y]]
-  while (stack.length) {
-    const [cx, cy] = stack.pop()!
+function floodFill(grid: number[], w: number, h: number, x: number, y: number, target: number, repl: number): number[] {
+  if (target === repl) return grid
+  const r = [...grid]; const st = [[x, y]]
+  while (st.length) {
+    const [cx, cy] = st.pop()!
     if (cx < 0 || cy < 0 || cx >= w || cy >= h) continue
-    const idx = cy * w + cx
-    if (result[idx] !== target) continue
-    result[idx] = replacement
-    stack.push([cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1])
+    const i = cy * w + cx
+    if (r[i] !== target) continue
+    r[i] = repl
+    st.push([cx+1,cy],[cx-1,cy],[cx,cy+1],[cx,cy-1])
   }
-  return result
+  return r
 }
 
-// ---------- Component ----------
+// ============================================================
+//  MAIN COMPONENT
+// ============================================================
 export default function EditorPage() {
-  const [gridW, setGridW] = useState(DEFAULT_W)
-  const [gridH, setGridH] = useState(DEFAULT_H)
-  const [grid, setGrid] = useState<number[]>(() => emptyGrid(DEFAULT_W, DEFAULT_H))
+  const [mode, setMode] = useState<'menu' | 'editor' | 'game'>('menu')
+  const [difficulty, setDifficulty] = useState<'easy'|'medium'|'hard'>('medium')
+
+  // editor state
+  const [gridW, setGridW] = useState(40)
+  const [gridH, setGridH] = useState(40)
+  const [grid, setGrid] = useState<number[]>(() => emptyGrid(40, 40))
   const [selectedTile, setSelectedTile] = useState(1)
   const [tool, setTool] = useState<Tool>('brush')
   const [brushSize, setBrushSize] = useState(1)
   const [showGrid, setShowGrid] = useState(true)
   const [history, setHistory] = useState<number[][]>([])
   const [redoStack, setRedoStack] = useState<number[][]>([])
-  const [mapName, setMapName] = useState('Новая карта')
+  const [mapName, setMapName] = useState('Арракис')
   const [hoverCell, setHoverCell] = useState<{x:number,y:number}|null>(null)
   const [rectStart, setRectStart] = useState<{x:number,y:number}|null>(null)
   const [previewGrid, setPreviewGrid] = useState<number[] | null>(null)
-
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const miniRef = useRef<HTMLCanvasElement>(null)
+  const editorCanvasRef = useRef<HTMLCanvasElement>(null)
   const isDrawing = useRef(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const panRef = useRef({ x: 0, y: 0, scale: 1, dragging: false, lastX: 0, lastY: 0 })
 
-  // ----- Drawing -----
-  const draw = useCallback((g: number[] = grid, preview?: number[] | null) => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')!
-    const w = gridW, h = gridH
-    canvas.width = w * TILE_PX
-    canvas.height = h * TILE_PX
-
-    // background
-    ctx.fillStyle = '#0a0a0a'
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-
-    const data = preview ?? g
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const id = data[y * w + x]
-        const tile = TILE_MAP.get(id)
-        if (!tile) continue
-        ctx.fillStyle = tile.color
-        ctx.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX)
-        // icon for non-terrain
-        if (tile.category !== 'terrain' && tile.icon !== '∅') {
-          ctx.fillStyle = tile.category === 'unit' ? '#000' : 'rgba(0,0,0,0.4)'
-          ctx.font = `${TILE_PX - 4}px sans-serif`
-          ctx.textAlign = 'center'
-          ctx.textBaseline = 'middle'
-          ctx.fillText(tile.icon, x * TILE_PX + TILE_PX / 2, y * TILE_PX + TILE_PX / 2 + 1)
-        }
-      }
-    }
-
-    // grid lines
-    if (showGrid) {
-      ctx.strokeStyle = 'rgba(0,0,0,0.15)'
-      ctx.lineWidth = 1
-      for (let x = 0; x <= w; x++) {
-        ctx.beginPath()
-        ctx.moveTo(x * TILE_PX + 0.5, 0)
-        ctx.lineTo(x * TILE_PX + 0.5, h * TILE_PX)
-        ctx.stroke()
-      }
-      for (let y = 0; y <= h; y++) {
-        ctx.beginPath()
-        ctx.moveTo(0, y * TILE_PX + 0.5)
-        ctx.lineTo(w * TILE_PX, y * TILE_PX + 0.5)
-        ctx.stroke()
-      }
-    }
-
-    // hover highlight
-    if (hoverCell) {
-      ctx.strokeStyle = '#fff'
-      ctx.lineWidth = 2
-      const s = brushSize
-      ctx.strokeRect(
-        (hoverCell.x - Math.floor(s / 2)) * TILE_PX + 1,
-        (hoverCell.y - Math.floor(s / 2)) * TILE_PX + 1,
-        s * TILE_PX - 2,
-        s * TILE_PX - 2
-      )
-    }
-
-    // rect preview
-    if (tool === 'rect' && rectStart && hoverCell) {
-      ctx.strokeStyle = TILE_MAP.get(selectedTile)?.color || '#fff'
-      ctx.lineWidth = 2
-      const x1 = Math.min(rectStart.x, hoverCell.x)
-      const y1 = Math.min(rectStart.y, hoverCell.y)
-      const x2 = Math.max(rectStart.x, hoverCell.x)
-      const y2 = Math.max(rectStart.y, hoverCell.y)
-      ctx.strokeRect(x1 * TILE_PX, y1 * TILE_PX, (x2 - x1 + 1) * TILE_PX, (y2 - y1 + 1) * TILE_PX)
-    }
-  }, [grid, gridW, gridH, showGrid, hoverCell, brushSize, tool, rectStart, selectedTile])
-
-  const drawMini = useCallback(() => {
-    const c = miniRef.current
-    if (!c) return
-    const ctx = c.getContext('2d')!
-    const s = 4
-    c.width = gridW * s
-    c.height = gridH * s
-    for (let y = 0; y < gridH; y++) {
-      for (let x = 0; x < gridW; x++) {
-        const id = grid[y * gridW + x]
-        const tile = TILE_MAP.get(id)
-        if (!tile) continue
-        ctx.fillStyle = tile.color
-        ctx.fillRect(x * s, y * s, s, s)
-      }
-    }
-  }, [grid, gridW, gridH])
-
-  useEffect(() => { draw() }, [draw])
-  useEffect(() => { drawMini() }, [drawMini])
-
-  // ----- History -----
-  const pushHistory = useCallback((prev: number[]) => {
-    setHistory(h => {
-      const next = [...h, prev]
-      if (next.length > 50) next.shift()
-      return next
-    })
-    setRedoStack([])
+  // tile previews
+  const [previews, setPreviews] = useState<Record<number, string>>({})
+  useEffect(() => {
+    const p: Record<number, string> = {}
+    for (const t of EDITOR_TILES) p[t.id] = getTilePreview(t.id, 40)
+    setPreviews(p)
   }, [])
 
-  // ----- Painting -----
-  const paintAt = useCallback((x: number, y: number, g: number[], tile: number): number[] => {
-    const result = [...g]
-    const half = Math.floor(brushSize / 2)
-    for (let dy = 0; dy < brushSize; dy++) {
-      for (let dx = 0; dx < brushSize; dx++) {
-        const nx = x - half + dx
-        const ny = y - half + dy
-        if (nx < 0 || ny < 0 || nx >= gridW || ny >= gridH) continue
-        result[ny * gridW + nx] = tile
-      }
+  // ---- editor drawing ----
+  const drawEditor = useCallback(() => {
+    const c = editorCanvasRef.current; if (!c) return
+    const ctx = c.getContext('2d')!
+    ctx.imageSmoothingEnabled = false
+    c.width = gridW * TILE_SIZE; c.height = gridH * TILE_SIZE
+    const g = previewGrid ?? grid
+    for (let y = 0; y < gridH; y++)
+      for (let x = 0; x < gridW; x++)
+        drawTerrain(ctx, g[y * gridW + x], x, y)
+    if (showGrid) {
+      ctx.strokeStyle = 'rgba(0,0,0,0.12)'; ctx.lineWidth = 1
+      for (let x = 0; x <= gridW; x++) { ctx.beginPath(); ctx.moveTo(x*TILE_SIZE+0.5,0); ctx.lineTo(x*TILE_SIZE+0.5,gridH*TILE_SIZE); ctx.stroke() }
+      for (let y = 0; y <= gridH; y++) { ctx.beginPath(); ctx.moveTo(0,y*TILE_SIZE+0.5); ctx.lineTo(gridW*TILE_SIZE,y*TILE_SIZE+0.5); ctx.stroke() }
     }
-    return result
-  }, [brushSize, gridW, gridH])
+    if (hoverCell) {
+      const s = brushSize; const half = Math.floor(s/2)
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2
+      ctx.strokeRect((hoverCell.x-half)*TILE_SIZE+1, (hoverCell.y-half)*TILE_SIZE+1, s*TILE_SIZE-2, s*TILE_SIZE-2)
+    }
+    if (tool === 'rect' && rectStart && hoverCell) {
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.setLineDash([4,4])
+      const x1=Math.min(rectStart.x,hoverCell.x), y1=Math.min(rectStart.y,hoverCell.y)
+      const x2=Math.max(rectStart.x,hoverCell.x), y2=Math.max(rectStart.y,hoverCell.y)
+      ctx.strokeRect(x1*TILE_SIZE, y1*TILE_SIZE, (x2-x1+1)*TILE_SIZE, (y2-y1+1)*TILE_SIZE)
+      ctx.setLineDash([])
+    }
+  }, [grid, gridW, gridH, showGrid, hoverCell, brushSize, tool, rectStart, previewGrid])
 
-  const getCellFromEvent = (e: React.MouseEvent): {x:number,y:number} | null => {
-    const canvas = canvasRef.current!
-    const rect = canvas.getBoundingClientRect()
-    const scaleX = canvas.width / rect.width
-    const scaleY = canvas.height / rect.height
-    const x = Math.floor(((e.clientX - rect.left) * scaleX) / TILE_PX)
-    const y = Math.floor(((e.clientY - rect.top) * scaleY) / TILE_PX)
-    if (x < 0 || y < 0 || x >= gridW || y >= gridH) return null
+  useEffect(() => { if (mode === 'editor') drawEditor() }, [drawEditor, mode])
+
+  const pushHistory = (prev: number[]) => {
+    setHistory(h => { const n = [...h, prev]; return n.length > 50 ? n.slice(-50) : n })
+    setRedoStack([])
+  }
+  const paintAt = (x: number, y: number, g: number[], tile: number): number[] => {
+    const r = [...g]; const half = Math.floor(brushSize/2)
+    for (let dy = 0; dy < brushSize; dy++)
+      for (let dx = 0; dx < brushSize; dx++) {
+        const nx = x-half+dx, ny = y-half+dy
+        if (nx<0||ny<0||nx>=gridW||ny>=gridH) continue
+        r[ny*gridW+nx] = tile
+      }
+    return r
+  }
+  const cellFromEvt = (e: React.MouseEvent) => {
+    const c = editorCanvasRef.current!; const r = c.getBoundingClientRect()
+    const x = Math.floor(((e.clientX - r.left) / r.width) * gridW)
+    const y = Math.floor(((e.clientY - r.top) / r.height) * gridH)
+    if (x<0||y<0||x>=gridW||y>=gridH) return null
     return { x, y }
   }
-
-  const handleDown = (e: React.MouseEvent) => {
-    const cell = getCellFromEvent(e)
-    if (!cell) return
-    if (tool === 'pan' || e.button === 1) return
-
+  const onDown = (e: React.MouseEvent) => {
+    const cell = cellFromEvt(e); if (!cell) return
     pushHistory(grid)
-
     if (tool === 'fill') {
-      const target = grid[cell.y * gridW + cell.x]
-      setGrid(floodFill(grid, gridW, gridH, cell.x, cell.y, target, selectedTile))
-      return
+      const t = grid[cell.y*gridW+cell.x]
+      setGrid(floodFill(grid, gridW, gridH, cell.x, cell.y, t, selectedTile)); return
     }
-
-    if (tool === 'rect') {
-      setRectStart(cell)
-      return
-    }
-
+    if (tool === 'rect') { setRectStart(cell); return }
     isDrawing.current = true
-    if (tool === 'eraser') {
-      setGrid(prev => paintAt(cell.x, cell.y, prev, 0))
-    } else {
-      setGrid(prev => paintAt(cell.x, cell.y, prev, selectedTile))
-    }
+    setGrid(prev => paintAt(cell.x, cell.y, prev, tool === 'eraser' ? 0 : selectedTile))
   }
-
-  const handleMove = (e: React.MouseEvent) => {
-    const cell = getCellFromEvent(e)
-    setHoverCell(cell)
-    if (!cell) return
-
+  const onMove = (e: React.MouseEvent) => {
+    const cell = cellFromEvt(e); setHoverCell(cell); if (!cell) return
     if (tool === 'rect' && rectStart) {
-      const half = Math.floor(brushSize / 2)
-      const x1 = Math.min(rectStart.x, cell.x)
-      const y1 = Math.min(rectStart.y, cell.y)
-      const x2 = Math.max(rectStart.x, cell.x)
-      const y2 = Math.max(rectStart.y, cell.y)
-      const preview = [...grid]
-      for (let y = y1; y <= y2; y++) {
-        for (let x = x1; x <= x2; x++) {
-          for (let dy = 0; dy < brushSize; dy++) {
-            for (let dx = 0; dx < brushSize; dx++) {
-              const nx = x - half + dx
-              const ny = y - half + dy
-              if (nx < 0 || ny < 0 || nx >= gridW || ny >= gridH) continue
-              preview[ny * gridW + nx] = selectedTile
-            }
-          }
+      const half = Math.floor(brushSize/2)
+      const x1=Math.min(rectStart.x,cell.x), y1=Math.min(rectStart.y,cell.y)
+      const x2=Math.max(rectStart.x,cell.x), y2=Math.max(rectStart.y,cell.y)
+      const p = [...grid]
+      for (let y=y1;y<=y2;y++) for (let x=x1;x<=x2;x++)
+        for (let dy=0;dy<brushSize;dy++) for (let dx=0;dx<brushSize;dx++) {
+          const nx=x-half+dx, ny=y-half+dy
+          if (nx<0||ny<0||nx>=gridW||ny>=gridH) continue
+          p[ny*gridW+nx] = selectedTile
         }
-      }
-      setPreviewGrid(preview)
-      return
+      setPreviewGrid(p); return
     }
-
     if (!isDrawing.current) return
-    if (tool === 'eraser') {
-      setGrid(prev => paintAt(cell.x, cell.y, prev, 0))
-    } else if (tool === 'brush') {
-      setGrid(prev => paintAt(cell.x, cell.y, prev, selectedTile))
-    }
+    setGrid(prev => paintAt(cell.x, cell.y, prev, tool === 'eraser' ? 0 : selectedTile))
   }
-
-  const handleUp = () => {
-    if (tool === 'rect' && rectStart && previewGrid) {
-      setGrid(previewGrid)
-      setPreviewGrid(null)
-      setRectStart(null)
-    }
+  const onUp = () => {
+    if (tool === 'rect' && rectStart && previewGrid) { setGrid(previewGrid); setPreviewGrid(null); setRectStart(null) }
     isDrawing.current = false
   }
+  const onLeave = () => { setHoverCell(null); isDrawing.current = false; if (previewGrid) { setPreviewGrid(null); setRectStart(null) } }
 
-  const handleLeave = () => {
-    setHoverCell(null)
-    isDrawing.current = false
-    if (previewGrid) { setPreviewGrid(null); setRectStart(null) }
-  }
-
-  // ----- Actions -----
-  const undo = () => {
-    if (history.length === 0) return
-    const prev = history[history.length - 1]
-    setHistory(h => h.slice(0, -1))
-    setRedoStack(r => [...r, grid])
-    setGrid(prev)
-  }
-  const redo = () => {
-    if (redoStack.length === 0) return
-    const next = redoStack[redoStack.length - 1]
-    setRedoStack(r => r.slice(0, -1))
-    setHistory(h => [...h, grid])
-    setGrid(next)
-  }
-  const clear = () => {
-    pushHistory(grid)
-    setGrid(emptyGrid(gridW, gridH))
-    toast.success('Карта очищена')
-  }
-  const fillAll = () => {
-    pushHistory(grid)
-    setGrid(new Array(gridW * gridH).fill(selectedTile))
-    toast.success(`Заполнено: ${TILE_MAP.get(selectedTile)?.name}`)
-  }
-
+  const undo = () => { if (!history.length) return; const p = history[history.length-1]; setHistory(h=>h.slice(0,-1)); setRedoStack(r=>[...r,grid]); setGrid(p) }
+  const redo = () => { if (!redoStack.length) return; const n = redoStack[redoStack.length-1]; setRedoStack(r=>r.slice(0,-1)); setHistory(h=>[...h,grid]); setGrid(n) }
+  const clearMap = () => { pushHistory(grid); setGrid(emptyGrid(gridW, gridH)); toast.success('Карта очищена') }
   const resize = (w: number, h: number) => {
-    pushHistory(grid)
-    const ng = emptyGrid(w, h)
-    for (let y = 0; y < Math.min(h, gridH); y++) {
-      for (let x = 0; x < Math.min(w, gridW); x++) {
-        ng[y * w + x] = grid[y * gridW + x]
-      }
-    }
+    pushHistory(grid); const ng = emptyGrid(w, h)
+    for (let y=0;y<Math.min(h,gridH);y++) for (let x=0;x<Math.min(w,gridW);x++) ng[y*w+x] = grid[y*gridW+x]
     setGridW(w); setGridH(h); setGrid(ng)
   }
-
-  // ----- Persistence -----
-  const saveLocal = () => {
-    const data = { name: mapName, w: gridW, h: gridH, grid, version: 1, saved: Date.now() }
-    localStorage.setItem('dune-map', JSON.stringify(data))
-    toast.success(`Карта "${mapName}" сохранена`)
-  }
+  const saveLocal = () => { localStorage.setItem('dune-map', JSON.stringify({name:mapName,w:gridW,h:gridH,grid})); toast.success(`"${mapName}" сохранена`) }
   const loadLocal = () => {
-    const raw = localStorage.getItem('dune-map')
-    if (!raw) { toast.error('Нет сохранённой карты'); return }
-    try {
-      const data = JSON.parse(raw)
-      setGridW(data.w); setGridH(data.h); setGrid(data.grid); setMapName(data.name)
-      setHistory([]); setRedoStack([])
-      toast.success(`Загружено: "${data.name}"`)
-    } catch { toast.error('Ошибка чтения') }
+    const raw = localStorage.getItem('dune-map'); if (!raw) { toast.error('Нет сохранения'); return }
+    try { const d = JSON.parse(raw); setGridW(d.w); setGridH(d.h); setGrid(d.grid); setMapName(d.name); setHistory([]); setRedoStack([]); toast.success(`Загружено: ${d.name}`) }
+    catch { toast.error('Ошибка') }
   }
   const exportJson = () => {
-    const data = { name: mapName, w: gridW, h: gridH, grid, version: 1 }
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = `${mapName.replace(/\s+/g, '_')}.json`; a.click()
-    URL.revokeObjectURL(url)
-    toast.success('Экспортировано в JSON')
+    const blob = new Blob([JSON.stringify({name:mapName,w:gridW,h:gridH,grid},null,2)], {type:'application/json'})
+    const url = URL.createObjectURL(blob); const a = document.createElement('a')
+    a.href=url; a.download=`${mapName.replace(/\s+/g,'_')}.json`; a.click(); URL.revokeObjectURL(url); toast.success('Экспорт JSON')
   }
   const importJson = () => fileInputRef.current?.click()
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0]
-    if (!f) return
-    const reader = new FileReader()
-    reader.onload = () => {
-      try {
-        const data = JSON.parse(reader.result as string)
-        setGridW(data.w); setGridH(data.h); setGrid(data.grid); setMapName(data.name || 'Импорт')
-        setHistory([]); setRedoStack([])
-        toast.success(`Импортировано: ${data.name}`)
-      } catch { toast.error('Неверный файл') }
-    }
-    reader.readAsText(f)
-    e.target.value = ''
+    const f = e.target.files?.[0]; if (!f) return
+    const rd = new FileReader()
+    rd.onload = () => { try { const d=JSON.parse(rd.result as string); setGridW(d.w); setGridH(d.h); setGrid(d.grid); setMapName(d.name||'Импорт'); setHistory([]); setRedoStack([]); toast.success('Импорт OK') } catch { toast.error('Неверный файл') } }
+    rd.readAsText(f); e.target.value=''
   }
 
-  const stats = useMemo(() => {
-    const counts: Record<number, number> = {}
-    grid.forEach(id => { counts[id] = (counts[id] || 0) + 1 })
-    return Object.entries(counts)
-      .map(([id, c]) => ({ tile: TILE_MAP.get(Number(id))!, count: c }))
-      .filter(s => s.tile && s.tile.id !== 0)
-      .sort((a, b) => b.count - a.count)
-  }, [grid])
+  const startGame = () => {
+    // ensure map has some spice & rock
+    let hasSpice = grid.some(t => t === 5 || t === 6)
+    if (!hasSpice) {
+      // add spice patches
+      const g = [...grid]
+      for (let i = 0; i < 8; i++) {
+        const x = Math.floor(Math.random()*gridW), y = Math.floor(Math.random()*gridH)
+        for (let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) {
+          const nx=x+dx, ny=y+dy
+          if (inBounds(nx,ny,gridW,gridH) && (g[idx(nx,ny,gridW)]===1||g[idx(nx,ny,gridW)]===2)) g[idx(nx,ny,gridW)] = Math.random()>0.5?5:6
+        }
+      }
+      setGrid(g)
+    }
+    setMode('game')
+  }
 
-  const tools: { id: Tool; icon: any; label: string; hotkey: string }[] = [
-    { id: 'brush',  icon: Brush,       label: 'Кисть',  hotkey: 'B' },
-    { id: 'eraser', icon: Eraser,      label: 'Ластик', hotkey: 'E' },
-    { id: 'fill',   icon: PaintBucket, label: 'Заливка', hotkey: 'F' },
-    { id: 'rect',   icon: Square,      label: 'Прямоугольник', hotkey: 'R' },
-    { id: 'pan',    icon: Hand,        label: 'Панорама', hotkey: 'H' },
-  ]
-
-  // keyboard shortcuts
+  // keyboard
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === 'INPUT') return
-      const key = e.key.toLowerCase()
-      if (key === 'b') setTool('brush')
-      else if (key === 'e') setTool('eraser')
-      else if (key === 'f') setTool('fill')
-      else if (key === 'r') setTool('rect')
-      else if (key === 'h') setTool('pan')
-      else if (key === 'g') setShowGrid(s => !s)
-      else if ((e.ctrlKey || e.metaKey) && key === 'z' && !e.shiftKey) { e.preventDefault(); undo() }
-      else if ((e.ctrlKey || e.metaKey) && (key === 'y' || (key === 'z' && e.shiftKey))) { e.preventDefault(); redo() }
-      else if ((e.ctrlKey || e.metaKey) && key === 's') { e.preventDefault(); saveLocal() }
+      if (mode !== 'editor') return
+      const k = e.key.toLowerCase()
+      if (k==='b') setTool('brush')
+      else if (k==='e') setTool('eraser')
+      else if (k==='f') setTool('fill')
+      else if (k==='r') setTool('rect')
+      else if (k==='g') setShowGrid(s=>!s)
+      else if ((e.ctrlKey||e.metaKey)&&k==='z'&&!e.shiftKey){e.preventDefault();undo()}
+      else if ((e.ctrlKey||e.metaKey)&&(k==='y'||(k==='z'&&e.shiftKey))){e.preventDefault();redo()}
+      else if ((e.ctrlKey||e.metaKey)&&k==='s'){e.preventDefault();saveLocal()}
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [history, redoStack, grid, mapName])
+  }, [mode, history, redoStack, grid, mapName, gridW, gridH])
+
+  if (mode === 'menu') return <MenuScreen mode={mode} setMode={setMode} difficulty={difficulty} setDifficulty={setDifficulty} onStartGame={startGame} onOpenEditor={() => setMode('editor')} />
+
+  if (mode === 'editor') {
+    const tools: {id:Tool;icon:any;label:string}[] = [
+      {id:'brush',icon:Brush,label:'Кисть'},{id:'eraser',icon:Eraser,label:'Ластик'},
+      {id:'fill',icon:PaintBucket,label:'Заливка'},{id:'rect',icon:Square,label:'Прямоуг.'},
+    ]
+    return (
+      <div className="min-h-screen flex flex-col bg-neutral-950 text-neutral-100">
+        <header className="border-b border-neutral-800 bg-neutral-900/80 backdrop-blur px-4 py-2 flex items-center gap-3 flex-wrap sticky top-0 z-20">
+          <Button size="sm" variant="ghost" onClick={() => setMode('menu')}><Home className="w-4 h-4 mr-1"/>Меню</Button>
+          <Separator orientation="vertical" className="h-6 bg-neutral-700" />
+          <h1 className="text-lg font-bold">Редактор карт</h1>
+          <Input value={mapName} onChange={e=>setMapName(e.target.value)} className="w-44 h-8 bg-neutral-800 border-neutral-700" />
+          <div className="flex-1" />
+          <Button size="sm" variant="ghost" onClick={undo} disabled={!history.length}><Undo2 className="w-4 h-4"/></Button>
+          <Button size="sm" variant="ghost" onClick={redo} disabled={!redoStack.length}><Redo2 className="w-4 h-4"/></Button>
+          <Separator orientation="vertical" className="h-6 mx-1 bg-neutral-700" />
+          <Button size="sm" variant="ghost" onClick={saveLocal}><Save className="w-4 h-4 mr-1"/>Сохр.</Button>
+          <Button size="sm" variant="ghost" onClick={loadLocal}><FolderOpen className="w-4 h-4 mr-1"/>Загр.</Button>
+          <Button size="sm" variant="ghost" onClick={exportJson}><Download className="w-4 h-4 mr-1"/>Эксп.</Button>
+          <Button size="sm" variant="ghost" onClick={importJson}><Upload className="w-4 h-4 mr-1"/>Имп.</Button>
+          <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={onFile} />
+          <Separator orientation="vertical" className="h-6 mx-1 bg-neutral-700" />
+          <Button size="sm" onClick={startGame} className="bg-amber-600 hover:bg-amber-700"><Play className="w-4 h-4 mr-1"/>Играть</Button>
+        </header>
+        <div className="flex-1 flex overflow-hidden">
+          <aside className="w-16 border-r border-neutral-800 bg-neutral-900/50 flex flex-col items-center py-3 gap-1">
+            {tools.map(t => { const I=t.icon; return (
+              <Button key={t.id} size="icon" variant={tool===t.id?'default':'ghost'} onClick={()=>setTool(t.id)}
+                className={`w-11 h-11 ${tool===t.id?'bg-amber-600 hover:bg-amber-600':''}`} title={t.label}>
+                <I className="w-5 h-5" />
+              </Button>
+            )})}
+            <Separator className="my-2 bg-neutral-700 w-8" />
+            <Button size="icon" variant={showGrid?'default':'ghost'} onClick={()=>setShowGrid(s=>!s)} className={`w-11 h-11 ${showGrid?'bg-amber-600 hover:bg-amber-600':''}`} title="Сетка"><Grid3x3 className="w-5 h-5"/></Button>
+            <Button size="icon" variant="ghost" onClick={clearMap} title="Очистить" className="w-11 h-11 text-red-400"><Trash2 className="w-5 h-5"/></Button>
+          </aside>
+          <main className="flex-1 overflow-auto bg-neutral-950 flex items-start justify-center p-6"
+            style={{backgroundImage:'radial-gradient(circle,rgba(255,255,255,0.04) 1px,transparent 1px)',backgroundSize:'24px 24px'}}>
+            <div className="shadow-2xl shadow-black/60 ring-1 ring-neutral-800">
+              <canvas ref={editorCanvasRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onLeave}
+                className="block cursor-crosshair" style={{imageRendering:'pixelated',maxWidth:'100%'}} />
+            </div>
+          </main>
+          <aside className="w-64 border-l border-neutral-800 bg-neutral-900/50 flex flex-col">
+            <ScrollArea className="flex-1">
+              <div className="p-3 space-y-4">
+                <div>
+                  <h3 className="text-xs font-semibold uppercase text-neutral-400 mb-2">Тайл</h3>
+                  <div className="flex items-center gap-2 p-2 rounded-lg bg-neutral-800/60">
+                    {previews[selectedTile] && <img src={previews[selectedTile]} alt="" className="w-10 h-10 rounded ring-1 ring-neutral-700" />}
+                    <div><div className="text-sm font-medium">{TERRAIN[selectedTile]?.name}</div>
+                    <div className="text-xs text-neutral-400">{TERRAIN[selectedTile]?.walkable?'проходимо':'непроходимо'}</div></div>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between mb-1"><Label className="text-xs uppercase text-neutral-400">Кисть</Label><span className="text-xs text-amber-500">{brushSize}×{brushSize}</span></div>
+                  <Slider value={[brushSize]} min={1} max={5} step={1} onValueChange={v=>setBrushSize(v[0])} />
+                </div>
+                <Separator className="bg-neutral-800" />
+                <div>
+                  <h3 className="text-xs font-semibold uppercase text-neutral-400 mb-2">Палитра</h3>
+                  <div className="grid grid-cols-4 gap-1">
+                    {EDITOR_TILES.map(t => (
+                      <button key={t.id} onClick={()=>setSelectedTile(t.id)} title={TERRAIN[t.id]?.name}
+                        className={`aspect-square rounded transition-all ${selectedTile===t.id?'ring-2 ring-amber-400 scale-105':'ring-1 ring-neutral-700 hover:ring-neutral-500'} overflow-hidden`}>
+                        {previews[t.id] && <img src={previews[t.id]} alt="" className="w-full h-full" style={{imageRendering:'pixelated'}} />}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <Separator className="bg-neutral-800" />
+                <div>
+                  <h3 className="text-xs font-semibold uppercase text-neutral-400 mb-2">Размер</h3>
+                  <div className="space-y-2">
+                    <div><div className="flex justify-between text-xs mb-1"><span>Ширина</span><span className="text-amber-500">{gridW}</span></div>
+                    <Slider value={[gridW]} min={20} max={64} step={4} onValueChange={v=>resize(v[0],gridH)} /></div>
+                    <div><div className="flex justify-between text-xs mb-1"><span>Высота</span><span className="text-amber-500">{gridH}</span></div>
+                    <Slider value={[gridH]} min={20} max={64} step={4} onValueChange={v=>resize(gridW,v[0])} /></div>
+                  </div>
+                </div>
+              </div>
+            </ScrollArea>
+          </aside>
+        </div>
+        <footer className="border-t border-neutral-800 bg-neutral-900 px-4 py-1.5 text-[11px] text-neutral-500 flex gap-3 flex-wrap">
+          <kbd className="px-1 rounded bg-neutral-800">B</kbd>кисть <kbd className="px-1 rounded bg-neutral-800">E</kbd>ластик
+          <kbd className="px-1 rounded bg-neutral-800">F</kbd>заливка <kbd className="px-1 rounded bg-neutral-800">R</kbd>прямоуг.
+          <kbd className="px-1 rounded bg-neutral-800">G</kbd>сетка <kbd className="px-1 rounded bg-neutral-800">Ctrl+Z</kbd>отмена
+          <span className="ml-auto">Курсор: {hoverCell?`${hoverCell.x},${hoverCell.y}`:'—'} · История: {history.length}/50</span>
+        </footer>
+      </div>
+    )
+  }
+
+  // GAME MODE
+  return <GameScreen difficulty={difficulty} terrain={grid} w={gridW} h={gridH} onExit={() => setMode('menu')} />
+}
+
+// ============================================================
+//  MENU SCREEN
+// ============================================================
+function MenuScreen({ setMode, difficulty, setDifficulty, onStartGame, onOpenEditor }: {
+  mode: string; setMode: (m:'menu'|'editor'|'game')=>void
+  difficulty: 'easy'|'medium'|'hard'; setDifficulty: (d:'easy'|'medium'|'hard')=>void
+  onStartGame: ()=>void; onOpenEditor: ()=>void
+}) {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center text-neutral-100 relative overflow-hidden"
+      style={{background:'radial-gradient(ellipse at center, #2a1a08 0%, #0a0604 70%)'}}>
+      {/* decorative dunes */}
+      <div className="absolute inset-0 opacity-20" style={{
+        backgroundImage:'repeating-linear-gradient(180deg, transparent 0px, transparent 40px, rgba(217,164,65,0.1) 40px, rgba(217,164,65,0.1) 42px)',
+      }} />
+      <div className="relative z-10 text-center px-6 max-w-2xl">
+        <div className="mb-2 text-7xl font-black tracking-tighter bg-gradient-to-b from-amber-300 to-orange-700 bg-clip-text text-transparent">DUNE</div>
+        <div className="text-amber-500/80 text-sm tracking-[0.4em] uppercase mb-8">Война за спайс</div>
+
+        <div className="bg-neutral-900/70 backdrop-blur border border-neutral-700 rounded-2xl p-8 space-y-6">
+          <div>
+            <div className="text-xs uppercase text-neutral-400 mb-2">Сложность</div>
+            <div className="grid grid-cols-3 gap-2">
+              {(['easy','medium','hard'] as const).map(d => (
+                <button key={d} onClick={()=>setDifficulty(d)}
+                  className={`py-3 rounded-lg font-semibold transition-all ${difficulty===d?'bg-amber-600 text-white':'bg-neutral-800 text-neutral-400 hover:bg-neutral-700'}`}>
+                  {d==='easy'?'Лёгкая':d==='medium'?'Средняя':'Тяжёлая'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Button size="lg" onClick={onStartGame} className="bg-gradient-to-b from-amber-500 to-orange-700 hover:from-amber-400 hover:to-orange-600 text-white h-14 text-base">
+              <Sword className="w-5 h-5 mr-2" /> Сражение
+            </Button>
+            <Button size="lg" variant="outline" onClick={onOpenEditor} className="h-14 text-base border-neutral-600 bg-neutral-800/50 hover:bg-neutral-800">
+              <Hammer className="w-5 h-5 mr-2" /> Редактор
+            </Button>
+          </div>
+
+          <div className="text-xs text-neutral-500 text-left space-y-1 pt-2 border-t border-neutral-800">
+            <p>• Вы — Дом Атрейдес (синий). Враг — Харконнен (фиолетовый).</p>
+            <p>• Добывайте спайс доставщиками, стройте казармы и фабрики.</p>
+            <p>• Уничтожьте дворец врага — победа. Берегите свой.</p>
+            <p>• На песке появляется Шай-Хулуд — он пожирает юниты!</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ============================================================
+//  GAME SCREEN
+// ============================================================
+function GameScreen({ difficulty, terrain, w, h, onExit }: {
+  difficulty: 'easy'|'medium'|'hard'; terrain: number[]; w: number; h: number; onExit: ()=>void
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const gameRef = useRef<GameState>(createGame(w, h, [...terrain], difficulty))
+  const [, forceRender] = useState(0)
+  const [paused, setPaused] = useState(false)
+  const [selected, setSelected] = useState<{type:'unit'|'building', id:number} | null>(null)
+  const [buildMode, setBuildMode] = useState<BuildingType | null>(null)
+  const [hoverCell, setHoverCell] = useState<{x:number,y:number}|null>(null)
+  const [showHelp, setShowHelp] = useState(false)
+  const selectedRef = useRef(selected); selectedRef.current = selected
+  const buildModeRef = useRef(buildMode); buildModeRef.current = buildMode
+  const pausedRef = useRef(paused); pausedRef.current = paused
+
+  // ---- game loop (logic) ----
+  useEffect(() => {
+    const iv = setInterval(() => {
+      if (pausedRef.current) return
+      if (gameRef.current.over) return
+      tick(gameRef.current)
+      forceRender(n => n + 1)
+    }, 100)
+    return () => clearInterval(iv)
+  }, [])
+
+  // ---- render loop ----
+  useEffect(() => {
+    let raf = 0
+    const render = () => {
+      const s = gameRef.current
+      const c = canvasRef.current
+      if (c) {
+        const ctx = c.getContext('2d')!
+        ctx.imageSmoothingEnabled = false
+        c.width = s.width * TILE_SIZE; c.height = s.height * TILE_SIZE
+        // terrain
+        for (let y=0;y<s.height;y++) for (let x=0;x<s.width;x++) drawTerrain(ctx, s.terrain[idx(x,y,s.width)], x, y)
+        // build preview
+        if (buildModeRef.current && hoverCell) {
+          const ok = canBuild(s, 'atreides', buildModeRef.current, hoverCell.x, hoverCell.y)
+          ctx.fillStyle = ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'
+          ctx.fillRect(hoverCell.x*TILE_SIZE, hoverCell.y*TILE_SIZE, TILE_SIZE, TILE_SIZE)
+        }
+        // buildings
+        for (const b of s.buildings) {
+          drawBuilding(ctx, b.type, b.owner, b.x*TILE_SIZE, b.y*TILE_SIZE)
+          if (b.hp < b.maxHp) drawHealthBar(ctx, b.x*TILE_SIZE+TILE_SIZE/2, b.y*TILE_SIZE-2, TILE_SIZE-4, b.hp/b.maxHp)
+          // production indicator
+          if (b.queue.length > 0) {
+            const q = b.queue[0]
+            ctx.fillStyle = '#000'; ctx.fillRect(b.x*TILE_SIZE+2, b.y*TILE_SIZE+TILE_SIZE-5, TILE_SIZE-4, 3)
+            ctx.fillStyle = '#22c55e'; ctx.fillRect(b.x*TILE_SIZE+2, b.y*TILE_SIZE+TILE_SIZE-5, (TILE_SIZE-4)*(q.progress/CONFIG[q.type].buildTime), 3)
+          }
+        }
+        // move markers for selected
+        const sel = selectedRef.current
+        if (sel?.type === 'unit') {
+          const u = s.units.find(u=>u.id===sel.id)
+          if (u && (u.state === 'move' || u.state === 'attack')) {
+            drawMoveMarker(ctx, u.tx, u.ty, u.owner==='atreides'?'#22c55e':'#ef4444')
+          }
+        }
+        // units
+        for (const u of s.units) {
+          drawUnit(ctx, u.type, u.owner, u.x*TILE_SIZE, u.y*TILE_SIZE)
+          if (u.hp < u.maxHp) drawHealthBar(ctx, u.x*TILE_SIZE, u.y*TILE_SIZE-TILE_SIZE/2+2, TILE_SIZE-6, u.hp/u.maxHp)
+          // cargo indicator for harvesters
+          if (u.type === 'harvester' && u.cargo > 0) {
+            ctx.fillStyle = '#e85d2f'; ctx.fillRect(u.x*TILE_SIZE-6, u.y*TILE_SIZE-TILE_SIZE/2+6, 12*(u.cargo/u.maxCargo), 2)
+          }
+        }
+        // worms
+        for (const w of s.worms) {
+          const angle = Math.atan2(w.y - w.ty, w.x - w.tx)
+          drawWorm(ctx, w.x*TILE_SIZE, w.y*TILE_SIZE, angle)
+        }
+        // selection highlight
+        if (sel?.type === 'unit') {
+          const u = s.units.find(u=>u.id===sel.id)
+          if (u) drawSelectionRing(ctx, u.x*TILE_SIZE, u.y*TILE_SIZE, '#4ade80')
+        } else if (sel?.type === 'building') {
+          const b = s.buildings.find(b=>b.id===sel.id)
+          if (b) {
+            ctx.strokeStyle = '#4ade80'; ctx.lineWidth = 2
+            ctx.strokeRect(b.x*TILE_SIZE, b.y*TILE_SIZE, TILE_SIZE, TILE_SIZE)
+          }
+        }
+      }
+      raf = requestAnimationFrame(render)
+    }
+    raf = requestAnimationFrame(render)
+    return () => cancelAnimationFrame(raf)
+  }, [])
+
+  // ---- input ----
+  const cellFromEvt = (e: React.MouseEvent) => {
+    const c = canvasRef.current!; const r = c.getBoundingClientRect()
+    const x = Math.floor(((e.clientX-r.left)/r.width)*gameRef.current.width)
+    const y = Math.floor(((e.clientY-r.top)/r.height)*gameRef.current.height)
+    if (x<0||y<0||x>=gameRef.current.width||y>=gameRef.current.height) return null
+    return { x, y }
+  }
+
+  const handleClick = (e: React.MouseEvent) => {
+    const s = gameRef.current
+    const cell = cellFromEvt(e); if (!cell) return
+
+    // building placement
+    if (buildMode) {
+      if (placeBuilding(s, 'atreides', buildMode, cell.x, cell.y)) {
+        toast.success(`Построено: ${typeRu(buildMode)}`)
+        setBuildMode(null)
+      } else {
+        toast.error('Нельзя строить здесь')
+      }
+      forceRender(n=>n+1); return
+    }
+
+    // select unit or building at cell
+    const unit = s.units.find(u => Math.round(u.x) === cell.x && Math.round(u.y) === cell.y && u.owner === 'atreides')
+    const bld = s.buildings.find(b => b.x === cell.x && b.y === cell.y && b.owner === 'atreides')
+    if (unit) setSelected({ type:'unit', id:unit.id })
+    else if (bld) setSelected({ type:'building', id:bld.id })
+    else setSelected(null)
+    forceRender(n=>n+1)
+  }
+
+  const handleRightClick = (e: React.MouseEvent) => {
+    e.preventDefault()
+    const s = gameRef.current
+    const cell = cellFromEvt(e); if (!cell) return
+    const sel = selectedRef.current
+    if (!sel || sel.type !== 'unit') return
+    const u = s.units.find(u=>u.id===sel.id); if (!u || u.type === 'harvester') return
+
+    // check if clicking on enemy
+    const enemyUnit = s.units.find(u => Math.round(u.x)===cell.x && Math.round(u.y)===cell.y && u.owner !== 'atreides')
+    const enemyBld = s.buildings.find(b => b.x===cell.x && b.y===cell.y && b.owner !== 'atreides')
+    if (enemyUnit) { commandAttack(s, u, enemyUnit.id, false); toast(`Атака: ${unitName(enemyUnit.type)}`) }
+    else if (enemyBld) { commandAttack(s, u, enemyBld.id, true); toast(`Атака: ${bldName(enemyBld.type)}`) }
+    else { commandMove(s, u, cell.x+0.5, cell.y+0.5); }
+    forceRender(n=>n+1)
+  }
+
+  const handleBuild = (type: BuildingType) => {
+    const s = gameRef.current
+    if (s.players.atreides.credits < BUILD_COSTS[type]) { toast.error('Недостаточно кредитов'); return }
+    setBuildMode(type)
+    toast.info(`Кликните по карте для постройки: ${typeRu(type)}`)
+  }
+
+  const handleProduce = (type: UnitType) => {
+    const s = gameRef.current
+    const sel = selectedRef.current
+    if (!sel || sel.type !== 'building') return
+    const b = s.buildings.find(b=>b.id===sel.id); if (!b) return
+    const prodMap: Record<BuildingType, UnitType[]> = {
+      palace:['harvester'], barracks:['soldier'], factory:['tank'], turret:[], refinery:[]
+    }
+    if (!prodMap[b.type].includes(type)) return
+    if (queueUnit(s, b, type)) toast.success(`В производство: ${unitName(type)}`)
+    else toast.error('Недостаточно средств или здание не достроено')
+    forceRender(n=>n+1)
+  }
+
+  const s = gameRef.current
+  const selUnit = selected?.type==='unit' ? s.units.find(u=>u.id===selected.id) : null
+  const selBld = selected?.type==='building' ? s.buildings.find(b=>b.id===selected.id) : null
+  const myUnits = s.units.filter(u=>u.owner==='atreides')
+  const myBldgs = s.buildings.filter(b=>b.owner==='atreides')
+  const armyCount = myUnits.filter(u=>u.type!=='harvester').length
+  const harvesterCount = myUnits.filter(u=>u.type==='harvester').length
 
   return (
     <div className="min-h-screen flex flex-col bg-neutral-950 text-neutral-100">
-      {/* Header */}
-      <header className="border-b border-neutral-800 bg-neutral-900/80 backdrop-blur px-4 py-2 flex items-center gap-3 flex-wrap sticky top-0 z-20">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded bg-gradient-to-br from-amber-500 to-orange-700 flex items-center justify-center font-bold text-sm">D</div>
-          <h1 className="text-lg font-bold tracking-tight">Dune Map Editor</h1>
-          <Badge variant="outline" className="text-amber-500 border-amber-700/50">v1.0</Badge>
-        </div>
+      {/* Top HUD */}
+      <header className="border-b border-neutral-800 bg-neutral-900/90 backdrop-blur px-4 py-2 flex items-center gap-4 flex-wrap sticky top-0 z-20">
+        <Button size="sm" variant="ghost" onClick={onExit}><Home className="w-4 h-4 mr-1"/>Меню</Button>
         <Separator orientation="vertical" className="h-6 bg-neutral-700" />
-        <Input
-          value={mapName}
-          onChange={e => setMapName(e.target.value)}
-          className="w-48 h-8 bg-neutral-800 border-neutral-700"
-          placeholder="Название карты"
-        />
-        <div className="flex-1" />
-        <div className="flex items-center gap-1">
-          <Button size="sm" variant="ghost" onClick={undo} disabled={!history.length} title="Ctrl+Z">
-            <Undo2 className="w-4 h-4" />
-          </Button>
-          <Button size="sm" variant="ghost" onClick={redo} disabled={!redoStack.length} title="Ctrl+Y">
-            <Redo2 className="w-4 h-4" />
-          </Button>
-          <Separator orientation="vertical" className="h-6 mx-1 bg-neutral-700" />
-          <Button size="sm" variant="ghost" onClick={saveLocal} title="Ctrl+S"><Save className="w-4 h-4 mr-1" />Сохранить</Button>
-          <Button size="sm" variant="ghost" onClick={loadLocal}><FolderOpen className="w-4 h-4 mr-1" />Загрузить</Button>
-          <Button size="sm" variant="ghost" onClick={exportJson}><Download className="w-4 h-4 mr-1" />Экспорт</Button>
-          <Button size="sm" variant="ghost" onClick={importJson}><Upload className="w-4 h-4 mr-1" />Импорт</Button>
-          <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={onFile} />
+        <div className="flex items-center gap-1.5 text-amber-400 font-bold">
+          <Coins className="w-4 h-4" /> <span className="font-mono">{Math.floor(s.players.atreides.credits)}</span>
         </div>
+        <Badge variant="outline" className="border-amber-700/50 text-amber-500">Атрейдес</Badge>
+        <div className="flex items-center gap-3 text-xs text-neutral-400">
+          <span>Армия: <b className="text-neutral-200">{armyCount}</b></span>
+          <span>Доставщики: <b className="text-neutral-200">{harvesterCount}</b></span>
+          <span>Здания: <b className="text-neutral-200">{myBldgs.length}</b></span>
+        </div>
+        <div className="flex-1" />
+        <Button size="sm" variant="ghost" onClick={()=>setPaused(p=>!p)}>
+          {paused ? <><Play className="w-4 h-4 mr-1"/>Продолжить</> : <><Pause className="w-4 h-4 mr-1"/>Пауза</>}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={()=>setShowHelp(h=>!h)}><Eye className="w-4 h-4 mr-1"/>Помощь</Button>
       </header>
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left toolbar */}
-        <aside className="w-16 border-r border-neutral-800 bg-neutral-900/50 flex flex-col items-center py-3 gap-1">
-          {tools.map(t => {
-            const Icon = t.icon
-            return (
-              <Button
-                key={t.id}
-                size="icon"
-                variant={tool === t.id ? 'default' : 'ghost'}
-                onClick={() => setTool(t.id)}
-                className={`w-11 h-11 ${tool === t.id ? 'bg-amber-600 hover:bg-amber-600' : ''}`}
-                title={`${t.label} (${t.hotkey})`}
-              >
-                <Icon className="w-5 h-5" />
-              </Button>
-            )
-          })}
-          <Separator className="my-2 bg-neutral-700 w-8" />
-          <Button size="icon" variant={showGrid ? 'default' : 'ghost'} onClick={() => setShowGrid(s => !s)} title="Сетка (G)" className={`w-11 h-11 ${showGrid ? 'bg-amber-600 hover:bg-amber-600' : ''}`}>
-            <Grid3x3 className="w-5 h-5" />
-          </Button>
-          <Button size="icon" variant="ghost" onClick={fillAll} title="Залить всё" className="w-11 h-11">
-            <PaintBucket className="w-5 h-5" />
-          </Button>
-          <Button size="icon" variant="ghost" onClick={clear} title="Очистить" className="w-11 h-11 text-red-400 hover:text-red-300">
-            <Trash2 className="w-5 h-5" />
-          </Button>
-        </aside>
+      {showHelp && (
+        <div className="bg-neutral-900 border-b border-neutral-800 px-4 py-2 text-xs text-neutral-400 flex gap-4 flex-wrap">
+          <span><b className="text-neutral-200">ЛКМ</b> — выбрать юнит/здание</span>
+          <span><b className="text-neutral-200">ПКМ</b> — движение/атака</span>
+          <span><b className="text-neutral-200">Доставщик</b> — сам ищет спайс и возвращает кредиты</span>
+          <span><b className="text-neutral-200">Червь</b> — ест юнитов на песке</span>
+        </div>
+      )}
 
-        {/* Canvas area */}
-        <main className="flex-1 overflow-auto bg-neutral-950 flex items-start justify-center p-6"
-          style={{
-            backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)',
-            backgroundSize: '24px 24px'
-          }}
-        >
-          <div className="shadow-2xl shadow-black/60 ring-1 ring-neutral-800">
-            <canvas
-              ref={canvasRef}
-              onMouseDown={handleDown}
-              onMouseMove={handleMove}
-              onMouseUp={handleUp}
-              onMouseLeave={handleLeave}
-              onContextMenu={e => e.preventDefault()}
-              className="block cursor-crosshair"
-              style={{ imageRendering: 'pixelated', maxWidth: '100%' }}
-            />
+      <div className="flex-1 flex overflow-hidden">
+        {/* Canvas */}
+        <main className="flex-1 overflow-auto bg-black flex items-start justify-center p-4">
+          <div className="shadow-2xl ring-1 ring-neutral-800 relative">
+            <canvas ref={canvasRef}
+              onMouseDown={handleClick} onContextMenu={handleRightClick}
+              onMouseMove={e => { const c = cellFromEvt(e); setHoverCell(c) }}
+              onMouseLeave={() => setHoverCell(null)}
+              className="block" style={{imageRendering:'pixelated', maxWidth:'100%', cursor: buildMode ? 'crosshair' : 'default'}} />
+            {/* Win/Lose overlay */}
+            {s.over && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur">
+                <div className="text-center">
+                  {s.winner === 'atreides' ? (
+                    <><Trophy className="w-20 h-20 text-amber-400 mx-auto mb-4" />
+                    <div className="text-5xl font-black text-amber-400 mb-2">ПОБЕДА</div>
+                    <div className="text-neutral-400 mb-6">Дворец Харконнен разрушен!</div></>
+                  ) : (
+                    <><Skull className="w-20 h-20 text-red-500 mx-auto mb-4" />
+                    <div className="text-5xl font-black text-red-500 mb-2">ПОРАЖЕНИЕ</div>
+                    <div className="text-neutral-400 mb-6">Ваш дворец пал!</div></>
+                  )}
+                  <Button onClick={onExit} size="lg" className="bg-amber-600 hover:bg-amber-700">В меню</Button>
+                </div>
+              </div>
+            )}
           </div>
         </main>
 
@@ -511,131 +638,131 @@ export default function EditorPage() {
         <aside className="w-72 border-l border-neutral-800 bg-neutral-900/50 flex flex-col">
           <ScrollArea className="flex-1">
             <div className="p-3 space-y-4">
-              {/* Selected tile */}
+              {/* Selection info */}
               <div>
-                <h3 className="text-xs font-semibold uppercase text-neutral-400 mb-2">Текущий тайл</h3>
-                <div className="flex items-center gap-3 p-2 rounded-lg bg-neutral-800/60">
-                  <div className="w-10 h-10 rounded flex items-center justify-center text-lg font-bold border border-neutral-700"
-                       style={{ background: TILE_MAP.get(selectedTile)?.color, color: '#000' }}>
-                    {TILE_MAP.get(selectedTile)?.icon}
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium">{TILE_MAP.get(selectedTile)?.name}</div>
-                    <div className="text-xs text-neutral-400">
-                      {TILE_MAP.get(selectedTile)?.walkable ? 'проходимо' : 'непроходимо'}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Brush size */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <Label className="text-xs uppercase text-neutral-400">Размер кисти</Label>
-                  <span className="text-xs text-amber-500 font-mono">{brushSize}×{brushSize}</span>
-                </div>
-                <Slider value={[brushSize]} min={1} max={5} step={1} onValueChange={v => setBrushSize(v[0])} />
-              </div>
-
-              <Separator className="bg-neutral-800" />
-
-              {/* Tile palette */}
-              <div>
-                <h3 className="text-xs font-semibold uppercase text-neutral-400 mb-2">Палитра тайлов</h3>
-                <div className="space-y-3">
-                  {CATEGORIES.map(cat => (
-                    <div key={cat}>
-                      <div className="text-[10px] font-medium text-neutral-500 mb-1 px-1">{CATEGORY_LABELS[cat]}</div>
-                      <div className="grid grid-cols-4 gap-1">
-                        {TILES.filter(t => t.category === cat).map(t => (
-                          <button
-                            key={t.id}
-                            onClick={() => setSelectedTile(t.id)}
-                            title={t.name}
-                            className={`aspect-square rounded flex items-center justify-center text-sm font-bold transition-all ${
-                              selectedTile === t.id
-                                ? 'ring-2 ring-amber-400 scale-105'
-                                : 'ring-1 ring-neutral-700 hover:ring-neutral-500'
-                            }`}
-                            style={{ background: t.color, color: t.category === 'unit' ? '#000' : 'rgba(0,0,0,0.5)' }}
-                          >
-                            {t.icon}
-                          </button>
-                        ))}
+                <h3 className="text-xs font-semibold uppercase text-neutral-400 mb-2">Выбрано</h3>
+                {selUnit ? (
+                  <div className="p-3 rounded-lg bg-neutral-800/60 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <div className="w-10 h-10 ring-1 ring-neutral-600 rounded overflow-hidden">
+                        <img src={getUnitPreview(selUnit.type, 'atreides', 40)} alt="" className="w-full h-full" style={{imageRendering:'pixelated'}}/>
+                      </div>
+                      <div>
+                        <div className="text-sm font-medium capitalize">{typeRu(selUnit.type)}</div>
+                        <div className="text-xs text-neutral-400">HP {Math.ceil(selUnit.hp)}/{selUnit.maxHp}</div>
                       </div>
                     </div>
-                  ))}
-                </div>
-              </div>
-
-              <Separator className="bg-neutral-800" />
-
-              {/* Map size */}
-              <div>
-                <h3 className="text-xs font-semibold uppercase text-neutral-400 mb-2">Размер карты</h3>
-                <div className="space-y-2">
-                  <div>
-                    <div className="flex justify-between text-xs mb-1"><span>Ширина</span><span className="text-amber-500">{gridW}</span></div>
-                    <Slider value={[gridW]} min={16} max={96} step={4} onValueChange={v => resize(v[0], gridH)} />
+                    {selUnit.type === 'harvester' && <div className="text-xs text-orange-400">Спайс: {selUnit.cargo}/{selUnit.maxCargo}</div>}
+                    <div className="text-xs text-neutral-400">Состояние: {stateRu(selUnit.state)}</div>
+                    <div className="text-[10px] text-neutral-500 pt-1">ПКМ — приказ двигаться/атаковать</div>
                   </div>
-                  <div>
-                    <div className="flex justify-between text-xs mb-1"><span>Высота</span><span className="text-amber-500">{gridH}</span></div>
-                    <Slider value={[gridH]} min={16} max={96} step={4} onValueChange={v => resize(gridW, v[0])} />
-                  </div>
-                </div>
-              </div>
-
-              <Separator className="bg-neutral-800" />
-
-              {/* Minimap */}
-              <div>
-                <h3 className="text-xs font-semibold uppercase text-neutral-400 mb-2 flex items-center gap-1"><MapIcon className="w-3 h-3" /> Мини-карта</h3>
-                <div className="bg-black rounded p-1 flex justify-center">
-                  <canvas ref={miniRef} style={{ imageRendering: 'pixelated', maxWidth: '100%' }} />
-                </div>
-              </div>
-
-              <Separator className="bg-neutral-800" />
-
-              {/* Stats */}
-              <div>
-                <h3 className="text-xs font-semibold uppercase text-neutral-400 mb-2">Статистика</h3>
-                <div className="space-y-1 max-h-40 overflow-y-auto pr-1">
-                  {stats.map(s => (
-                    <div key={s.tile.id} className="flex items-center justify-between text-xs">
-                      <div className="flex items-center gap-2">
-                        <span className="w-3 h-3 rounded-sm" style={{ background: s.tile.color }} />
-                        <span className="text-neutral-300">{s.tile.name}</span>
+                ) : selBld ? (
+                  <div className="p-3 rounded-lg bg-neutral-800/60 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <div className="w-10 h-10 ring-1 ring-neutral-600 rounded overflow-hidden">
+                        <img src={getBuildingPreview(selBld.type, 'atreides', 40)} alt="" className="w-full h-full" style={{imageRendering:'pixelated'}}/>
                       </div>
-                      <span className="text-neutral-500 font-mono">{s.count}</span>
+                      <div>
+                        <div className="text-sm font-medium">{typeRu(selBld.type)}</div>
+                        <div className="text-xs text-neutral-400">HP {Math.ceil(selBld.hp)}/{selBld.maxHp}</div>
+                      </div>
                     </div>
+                    {selBld.hp < selBld.maxHp && <div className="text-xs text-amber-500">Строится... {Math.floor(selBld.hp/selBld.maxHp*100)}%</div>}
+                    {/* Production buttons */}
+                    {selBld.type === 'palace' && (
+                      <Button size="sm" className="w-full bg-amber-600 hover:bg-amber-700" onClick={()=>handleProduce('harvester')}>
+                        <Hammer className="w-3 h-3 mr-1"/> Доставщик ({CONFIG.harvester.cost})
+                      </Button>
+                    )}
+                    {selBld.type === 'barracks' && (
+                      <Button size="sm" className="w-full bg-amber-600 hover:bg-amber-700" onClick={()=>handleProduce('soldier')}>
+                        <Sword className="w-3 h-3 mr-1"/> Солдат ({CONFIG.soldier.cost})
+                      </Button>
+                    )}
+                    {selBld.type === 'factory' && (
+                      <Button size="sm" className="w-full bg-amber-600 hover:bg-amber-700" onClick={()=>handleProduce('tank')}>
+                        <Sword className="w-3 h-3 mr-1"/> Танк ({CONFIG.tank.cost})
+                      </Button>
+                    )}
+                    {selBld.queue.length > 0 && (
+                      <div className="text-xs text-neutral-400">В очереди: {selBld.queue.length}</div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="p-3 rounded-lg bg-neutral-800/40 text-xs text-neutral-500 text-center">Ничего не выбрано</div>
+                )}
+              </div>
+
+              <Separator className="bg-neutral-800" />
+
+              {/* Build menu */}
+              <div>
+                <h3 className="text-xs font-semibold uppercase text-neutral-400 mb-2">Строительство</h3>
+                <div className="space-y-1.5">
+                  {([
+                    ['barracks', CONFIG.barracks.cost], ['factory', CONFIG.factory.cost],
+                    ['turret', CONFIG.turret.cost], ['refinery', CONFIG.refinery.cost],
+                  ] as [BuildingType, number][]).map(([t, cost]) => {
+                    const can = s.players.atreides.credits >= cost
+                    return (
+                      <button key={t} onClick={()=>handleBuild(t)} disabled={!can}
+                        className={`w-full flex items-center gap-2 p-2 rounded-lg transition-all ${can?'bg-neutral-800 hover:bg-neutral-700':'bg-neutral-900 opacity-40'}`}>
+                        <div className="w-8 h-8 ring-1 ring-neutral-600 rounded overflow-hidden">
+                          <img src={getBuildingPreview(t, 'atreides', 32)} alt="" className="w-full h-full" style={{imageRendering:'pixelated'}}/>
+                        </div>
+                        <div className="flex-1 text-left">
+                          <div className="text-sm">{typeRu(t)}</div>
+                        </div>
+                        <div className={`text-xs font-mono ${can?'text-amber-400':'text-red-400'}`}>{cost}</div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <Separator className="bg-neutral-800" />
+
+              {/* Enemy info */}
+              <div>
+                <h3 className="text-xs font-semibold uppercase text-neutral-400 mb-2">Враг: Харконнен</h3>
+                <div className="text-xs space-y-1 text-neutral-400">
+                  <div className="flex justify-between"><span>Кредиты:</span><span className="font-mono text-purple-400">{Math.floor(s.players.harkonnen.credits)}</span></div>
+                  <div className="flex justify-between"><span>Юнитов:</span><span className="font-mono">{s.units.filter(u=>u.owner==='harkonnen').length}</span></div>
+                  <div className="flex justify-between"><span>Зданий:</span><span className="font-mono">{s.buildings.filter(b=>b.owner==='harkonnen').length}</span></div>
+                  <div className="flex justify-between"><span>Червей:</span><span className="font-mono text-orange-500">{s.worms.length}</span></div>
+                </div>
+              </div>
+
+              <Separator className="bg-neutral-800" />
+
+              {/* Event log */}
+              <div>
+                <h3 className="text-xs font-semibold uppercase text-neutral-400 mb-2">События</h3>
+                <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
+                  {s.events.slice(-10).reverse().map((ev, i) => (
+                    <div key={i} className={`text-[11px] leading-tight ${
+                      ev.type==='win'?'text-amber-400 font-bold':ev.type==='lose'?'text-red-400 font-bold':
+                      ev.type==='warn'?'text-orange-400':ev.type==='death'?'text-red-300':
+                      ev.type==='spice'?'text-green-400':ev.type==='build'?'text-blue-300':'text-neutral-400'
+                    }`}>{ev.msg}</div>
                   ))}
+                  {s.events.length === 0 && <div className="text-[11px] text-neutral-600">Пока тихо...</div>}
                 </div>
               </div>
             </div>
           </ScrollArea>
-
-          {/* Footer status */}
-          <div className="border-t border-neutral-800 p-2 text-[10px] text-neutral-500 space-y-0.5">
-            <div className="flex justify-between"><span>Курсор:</span><span className="font-mono">{hoverCell ? `${hoverCell.x},${hoverCell.y}` : '—'}</span></div>
-            <div className="flex justify-between"><span>История:</span><span className="font-mono">{history.length}/50</span></div>
-            <div className="flex justify-between"><span>Тайлов:</span><span className="font-mono">{gridW * gridH}</span></div>
-          </div>
         </aside>
       </div>
 
-      {/* Footer */}
-      <footer className="border-t border-neutral-800 bg-neutral-900 px-4 py-1.5 text-[11px] text-neutral-500 flex items-center gap-4 flex-wrap">
-        <span>Горячие клавиши:</span>
-        <kbd className="px-1 rounded bg-neutral-800">B</kbd>кисть
-        <kbd className="px-1 rounded bg-neutral-800">E</kbd>ластик
-        <kbd className="px-1 rounded bg-neutral-800">F</kbd>заливка
-        <kbd className="px-1 rounded bg-neutral-800">R</kbd>прямоугольник
-        <kbd className="px-1 rounded bg-neutral-800">H</kbd>панорама
-        <kbd className="px-1 rounded bg-neutral-800">G</kbd>сетка
-        <kbd className="px-1 rounded bg-neutral-800">Ctrl+Z/Y</kbd>отмена/повтор
-        <kbd className="px-1 rounded bg-neutral-800">Ctrl+S</kbd>сохранить
+      <footer className="border-t border-neutral-800 bg-neutral-900 px-4 py-1.5 text-[11px] text-neutral-500 flex gap-4">
+        <span><b className="text-neutral-300">ЛКМ</b> выбрать</span>
+        <span><b className="text-neutral-300">ПКМ</b> приказ</span>
+        <span className="ml-auto">Тик: {s.tick} · Сложность: {difficulty==='easy'?'лёгкая':difficulty==='medium'?'средняя':'тяжёлая'}</span>
       </footer>
     </div>
   )
+}
+
+function stateRu(st: string): string {
+  return ({idle:'ожидание',move:'движение',attack:'атака',harvest:'сбор',return:'возврат'} as any)[st] || st
 }
