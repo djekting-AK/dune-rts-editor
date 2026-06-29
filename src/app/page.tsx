@@ -10,7 +10,7 @@ import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Brush, Eraser, PaintBucket, Square, Grid3x3, Save, FolderOpen,
-  Download, Upload, Trash2, Undo2, Redo2, Hand, Map as MapIcon,
+  Download, Upload, Trash2, Undo2, Redo2, Hand, Map as MapIcon, Sparkles,
   Play, Pause, Home, Hammer, Sword, Coins, Skull, Trophy, Eye,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -24,6 +24,7 @@ import {
   createGame, tick, CONFIG, BUILD_COSTS, type GameState, type Unit, type Building,
   canBuild, placeBuilding, queueUnit, commandMove, commandAttack,
   idx, isWalkable, isBuildable, buildingAt, dist, inBounds,
+  pickUnitAt, pickBuildingAt,
   typeRu, unitName, bldName, factionRu,
 } from '@/lib/game-engine'
 
@@ -44,6 +45,62 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 function emptyGrid(w: number, h: number): number[] {
   return new Array(w * h).fill(1)
+}
+
+// Generate a varied, visually interesting default map (sand + spice + dunes + rock + water)
+function generateDefaultMap(w: number, h: number): number[] {
+  const g = new Array(w * h).fill(1)
+  const rng = (() => { let s = 12345; return () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff } })()
+  // dune patches
+  for (let i = 0; i < 5; i++) {
+    const cx = Math.floor(rng() * w), cy = Math.floor(rng() * h), r = 2 + Math.floor(rng() * 3)
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      const x = cx + dx, y = cy + dy
+      if (x < 0 || y < 0 || x >= w || y >= h) continue
+      if (dx*dx + dy*dy <= r*r && rng() > 0.3) g[y*w+x] = 2
+    }
+  }
+  // rock plateaus
+  for (let i = 0; i < 4; i++) {
+    const cx = Math.floor(rng() * w), cy = Math.floor(rng() * h), r = 1 + Math.floor(rng() * 2)
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      const x = cx + dx, y = cy + dy
+      if (x < 0 || y < 0 || x >= w || y >= h) continue
+      if (dx*dx + dy*dy <= r*r) g[y*w+x] = 3
+    }
+  }
+  // mountains (on rock)
+  for (let i = 0; i < 3; i++) {
+    const cx = Math.floor(rng() * w), cy = Math.floor(rng() * h)
+    if (g[cy*w+cx] === 3) g[cy*w+cx] = 4
+  }
+  // water lakes
+  for (let i = 0; i < 2; i++) {
+    const cx = Math.floor(rng() * w), cy = Math.floor(rng() * h), r = 2
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      const x = cx + dx, y = cy + dy
+      if (x < 0 || y < 0 || x >= w || y >= h) continue
+      if (dx*dx + dy*dy <= r*r) g[y*w+x] = 7
+    }
+  }
+  // spice fields (on sand/dunes) — more, bigger, brighter
+  for (let i = 0; i < 9; i++) {
+    const cx = Math.floor(rng() * w), cy = Math.floor(rng() * h), r = 2 + Math.floor(rng() * 2)
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      const x = cx + dx, y = cy + dy
+      if (x < 0 || y < 0 || x >= w || y >= h) continue
+      const idx = y*w+x
+      if ((g[idx] === 1 || g[idx] === 2) && rng() > 0.25) g[idx] = rng() > 0.4 ? 5 : 6
+    }
+  }
+  // clear corners for bases (atreides bottom-left, harkonnen top-right)
+  for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+    if (Math.abs(dx) + Math.abs(dy) <= 3) {
+      if (3+dx >= 0 && Math.floor(h/2)+dy >= 0 && 3+dx < w && Math.floor(h/2)+dy < h) g[(Math.floor(h/2)+dy)*w + (3+dx)] = 1
+      if (w-4+dx >= 0 && Math.floor(h/2)+dy >= 0 && w-4+dx < w && Math.floor(h/2)+dy < h) g[(Math.floor(h/2)+dy)*w + (w-4+dx)] = 1
+    }
+  }
+  return g
 }
 
 function floodFill(grid: number[], w: number, h: number, x: number, y: number, target: number, repl: number): number[] {
@@ -68,9 +125,9 @@ export default function EditorPage() {
   const [difficulty, setDifficulty] = useState<'easy'|'medium'|'hard'>('medium')
 
   // editor state
-  const [gridW, setGridW] = useState(40)
-  const [gridH, setGridH] = useState(40)
-  const [grid, setGrid] = useState<number[]>(() => emptyGrid(40, 40))
+  const [gridW, setGridW] = useState(24)
+  const [gridH, setGridH] = useState(24)
+  const [grid, setGrid] = useState<number[]>(() => generateDefaultMap(24, 24))
   const [selectedTile, setSelectedTile] = useState(1)
   const [tool, setTool] = useState<Tool>('brush')
   const [brushSize, setBrushSize] = useState(1)
@@ -97,12 +154,12 @@ export default function EditorPage() {
   const drawEditor = useCallback(() => {
     const c = editorCanvasRef.current; if (!c) return
     const ctx = c.getContext('2d')!
-    ctx.imageSmoothingEnabled = false
+    ctx.imageSmoothingEnabled = true
     c.width = gridW * TILE_SIZE; c.height = gridH * TILE_SIZE
     const g = previewGrid ?? grid
     for (let y = 0; y < gridH; y++)
       for (let x = 0; x < gridW; x++)
-        drawTerrain(ctx, g[y * gridW + x], x, y)
+        drawTerrain(ctx, g[y * gridW + x], x, y, Date.now() / 400)
     if (showGrid) {
       ctx.strokeStyle = 'rgba(0,0,0,0.12)'; ctx.lineWidth = 1
       for (let x = 0; x <= gridW; x++) { ctx.beginPath(); ctx.moveTo(x*TILE_SIZE+0.5,0); ctx.lineTo(x*TILE_SIZE+0.5,gridH*TILE_SIZE); ctx.stroke() }
@@ -183,6 +240,7 @@ export default function EditorPage() {
   const undo = () => { if (!history.length) return; const p = history[history.length-1]; setHistory(h=>h.slice(0,-1)); setRedoStack(r=>[...r,grid]); setGrid(p) }
   const redo = () => { if (!redoStack.length) return; const n = redoStack[redoStack.length-1]; setRedoStack(r=>r.slice(0,-1)); setHistory(h=>[...h,grid]); setGrid(n) }
   const clearMap = () => { pushHistory(grid); setGrid(emptyGrid(gridW, gridH)); toast.success('Карта очищена') }
+  const randomMap = () => { pushHistory(grid); setGrid(generateDefaultMap(gridW, gridH)); toast.success('Карта сгенерирована') }
   const resize = (w: number, h: number) => {
     pushHistory(grid); const ng = emptyGrid(w, h)
     for (let y=0;y<Math.min(h,gridH);y++) for (let x=0;x<Math.min(w,gridW);x++) ng[y*w+x] = grid[y*gridW+x]
@@ -280,13 +338,14 @@ export default function EditorPage() {
             )})}
             <Separator className="my-2 bg-neutral-700 w-8" />
             <Button size="icon" variant={showGrid?'default':'ghost'} onClick={()=>setShowGrid(s=>!s)} className={`w-11 h-11 ${showGrid?'bg-amber-600 hover:bg-amber-600':''}`} title="Сетка"><Grid3x3 className="w-5 h-5"/></Button>
+            <Button size="icon" variant="ghost" onClick={randomMap} title="Случайная карта" className="w-11 h-11 text-emerald-400"><Sparkles className="w-5 h-5"/></Button>
             <Button size="icon" variant="ghost" onClick={clearMap} title="Очистить" className="w-11 h-11 text-red-400"><Trash2 className="w-5 h-5"/></Button>
           </aside>
           <main className="flex-1 overflow-auto bg-neutral-950 flex items-start justify-center p-6"
             style={{backgroundImage:'radial-gradient(circle,rgba(255,255,255,0.04) 1px,transparent 1px)',backgroundSize:'24px 24px'}}>
             <div className="shadow-2xl shadow-black/60 ring-1 ring-neutral-800">
               <canvas ref={editorCanvasRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onLeave}
-                className="block cursor-crosshair" style={{imageRendering:'pixelated',maxWidth:'100%'}} />
+                className="block cursor-crosshair" style={{maxWidth:'100%'}} />
             </div>
           </main>
           <aside className="w-64 border-l border-neutral-800 bg-neutral-900/50 flex flex-col">
@@ -311,7 +370,7 @@ export default function EditorPage() {
                     {EDITOR_TILES.map(t => (
                       <button key={t.id} onClick={()=>setSelectedTile(t.id)} title={TERRAIN[t.id]?.name}
                         className={`aspect-square rounded transition-all ${selectedTile===t.id?'ring-2 ring-amber-400 scale-105':'ring-1 ring-neutral-700 hover:ring-neutral-500'} overflow-hidden`}>
-                        {previews[t.id] && <img src={previews[t.id]} alt="" className="w-full h-full" style={{imageRendering:'pixelated'}} />}
+                        {previews[t.id] && <img src={previews[t.id]} alt="" className="w-full h-full" />}
                       </button>
                     ))}
                   </div>
@@ -411,9 +470,28 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
   const [buildMode, setBuildMode] = useState<BuildingType | null>(null)
   const [hoverCell, setHoverCell] = useState<{x:number,y:number}|null>(null)
   const [showHelp, setShowHelp] = useState(false)
+  const [zoom, setZoom] = useState(1.3)
   const selectedRef = useRef(selected); selectedRef.current = selected
   const buildModeRef = useRef(buildMode); buildModeRef.current = buildMode
   const pausedRef = useRef(paused); pausedRef.current = paused
+  const zoomRef = useRef(zoom); zoomRef.current = zoom
+  const hoverCellRef = useRef(hoverCell); hoverCellRef.current = hoverCell
+
+  // ---- zoom with mouse wheel ----
+  const onWheel = (e: React.WheelEvent) => {
+    e.preventDefault()
+    setZoom(z => {
+      const nz = Math.max(0.7, Math.min(2.5, +(z - Math.sign(e.deltaY) * 0.15).toFixed(2)))
+      zoomRef.current = nz
+      return nz
+    })
+  }
+  // reset zoom on Esc
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === 'Escape') { setBuildMode(null); setZoom(1.3) } }
+    window.addEventListener('keydown', k)
+    return () => window.removeEventListener('keydown', k)
+  }, [])
 
   // ---- game loop (logic) ----
   useEffect(() => {
@@ -432,17 +510,24 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
     const render = () => {
       const s = gameRef.current
       const c = canvasRef.current
+      const tNow = Date.now() / 400
+      const z = zoomRef.current
       if (c) {
         const ctx = c.getContext('2d')!
-        ctx.imageSmoothingEnabled = false
-        c.width = s.width * TILE_SIZE; c.height = s.height * TILE_SIZE
-        // terrain
-        for (let y=0;y<s.height;y++) for (let x=0;x<s.width;x++) drawTerrain(ctx, s.terrain[idx(x,y,s.width)], x, y)
+        // render at zoom resolution for crisp pixels (1:1 with display)
+        const dpr = Math.min(window.devicePixelRatio || 1, 2)
+        const internalW = Math.round(s.width * TILE_SIZE * z * dpr)
+        const internalH = Math.round(s.height * TILE_SIZE * z * dpr)
+        if (c.width !== internalW || c.height !== internalH) { c.width = internalW; c.height = internalH }
+        ctx.setTransform(z * dpr, 0, 0, z * dpr, 0, 0)
+        ctx.imageSmoothingEnabled = true
+        // terrain (animated water)
+        for (let y=0;y<s.height;y++) for (let x=0;x<s.width;x++) drawTerrain(ctx, s.terrain[idx(x,y,s.width)], x, y, tNow)
         // build preview
-        if (buildModeRef.current && hoverCell) {
-          const ok = canBuild(s, 'atreides', buildModeRef.current, hoverCell.x, hoverCell.y)
+        if (buildModeRef.current && hoverCellRef.current) {
+          const ok = canBuild(s, 'atreides', buildModeRef.current, hoverCellRef.current.x, hoverCellRef.current.y)
           ctx.fillStyle = ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'
-          ctx.fillRect(hoverCell.x*TILE_SIZE, hoverCell.y*TILE_SIZE, TILE_SIZE, TILE_SIZE)
+          ctx.fillRect(hoverCellRef.current.x*TILE_SIZE, hoverCellRef.current.y*TILE_SIZE, TILE_SIZE, TILE_SIZE)
         }
         // buildings
         for (const b of s.buildings) {
@@ -451,8 +536,8 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
           // production indicator
           if (b.queue.length > 0) {
             const q = b.queue[0]
-            ctx.fillStyle = '#000'; ctx.fillRect(b.x*TILE_SIZE+2, b.y*TILE_SIZE+TILE_SIZE-5, TILE_SIZE-4, 3)
-            ctx.fillStyle = '#22c55e'; ctx.fillRect(b.x*TILE_SIZE+2, b.y*TILE_SIZE+TILE_SIZE-5, (TILE_SIZE-4)*(q.progress/CONFIG[q.type].buildTime), 3)
+            ctx.fillStyle = '#000'; ctx.fillRect(b.x*TILE_SIZE+2, b.y*TILE_SIZE+TILE_SIZE-6, TILE_SIZE-4, 4)
+            ctx.fillStyle = '#22c55e'; ctx.fillRect(b.x*TILE_SIZE+2, b.y*TILE_SIZE+TILE_SIZE-6, (TILE_SIZE-4)*(q.progress/CONFIG[q.type].buildTime), 4)
           }
         }
         // move markers for selected
@@ -463,18 +548,21 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
             drawMoveMarker(ctx, u.tx, u.ty, u.owner==='atreides'?'#22c55e':'#ef4444')
           }
         }
-        // units
+        // units (with bob animation for moving units)
         for (const u of s.units) {
-          drawUnit(ctx, u.type, u.owner, u.x*TILE_SIZE, u.y*TILE_SIZE)
+          const moving = u.state === 'move' || u.state === 'attack' || u.state === 'harvest' || u.state === 'return'
+          const bob = moving ? Math.sin(tNow * 6 + u.id) * 1 : 0
+          drawUnit(ctx, u.type, u.owner, u.x*TILE_SIZE, u.y*TILE_SIZE, bob)
           if (u.hp < u.maxHp) drawHealthBar(ctx, u.x*TILE_SIZE, u.y*TILE_SIZE-TILE_SIZE/2+2, TILE_SIZE-6, u.hp/u.maxHp)
           // cargo indicator for harvesters
           if (u.type === 'harvester' && u.cargo > 0) {
-            ctx.fillStyle = '#e85d2f'; ctx.fillRect(u.x*TILE_SIZE-6, u.y*TILE_SIZE-TILE_SIZE/2+6, 12*(u.cargo/u.maxCargo), 2)
+            ctx.fillStyle = '#e85d2f'; ctx.fillRect(u.x*TILE_SIZE-8, u.y*TILE_SIZE-TILE_SIZE/2+6, 16*(u.cargo/u.maxCargo), 3)
+            ctx.fillStyle = 'rgba(255,150,80,0.6)'; ctx.fillRect(u.x*TILE_SIZE-8, u.y*TILE_SIZE-TILE_SIZE/2+6, 16*(u.cargo/u.maxCargo), 1)
           }
         }
-        // worms
+        // worms (with subtle wiggle)
         for (const w of s.worms) {
-          const angle = Math.atan2(w.y - w.ty, w.x - w.tx)
+          const angle = Math.atan2(w.y - w.ty, w.x - w.tx) + Math.sin(tNow * 3 + w.id) * 0.15
           drawWorm(ctx, w.x*TILE_SIZE, w.y*TILE_SIZE, angle)
         }
         // selection highlight
@@ -503,15 +591,24 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
     if (x<0||y<0||x>=gameRef.current.width||y>=gameRef.current.height) return null
     return { x, y }
   }
+  // float coords (for picking units accurately)
+  const pointFromEvt = (e: React.MouseEvent) => {
+    const c = canvasRef.current!; const r = c.getBoundingClientRect()
+    const x = ((e.clientX-r.left)/r.width)*gameRef.current.width
+    const y = ((e.clientY-r.top)/r.height)*gameRef.current.height
+    return { x, y }
+  }
 
   const handleClick = (e: React.MouseEvent) => {
     const s = gameRef.current
     const cell = cellFromEvt(e); if (!cell) return
+    const pt = pointFromEvt(e)
 
     // building placement
-    if (buildMode) {
-      if (placeBuilding(s, 'atreides', buildMode, cell.x, cell.y)) {
-        toast.success(`Построено: ${typeRu(buildMode)}`)
+    const bm = buildModeRef.current
+    if (bm) {
+      if (placeBuilding(s, 'atreides', bm, cell.x, cell.y)) {
+        toast.success(`Построено: ${typeRu(bm)}`)
         setBuildMode(null)
       } else {
         toast.error('Нельзя строить здесь')
@@ -519,9 +616,9 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
       forceRender(n=>n+1); return
     }
 
-    // select unit or building at cell
-    const unit = s.units.find(u => Math.round(u.x) === cell.x && Math.round(u.y) === cell.y && u.owner === 'atreides')
-    const bld = s.buildings.find(b => b.x === cell.x && b.y === cell.y && b.owner === 'atreides')
+    // select nearest friendly unit, else building (radius picking = forgiving clicks)
+    const unit = pickUnitAt(s, pt.x, pt.y, 'atreides', 1.0)
+    const bld = pickBuildingAt(s, pt.x, pt.y, 'atreides')
     if (unit) setSelected({ type:'unit', id:unit.id })
     else if (bld) setSelected({ type:'building', id:bld.id })
     else setSelected(null)
@@ -532,16 +629,21 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
     e.preventDefault()
     const s = gameRef.current
     const cell = cellFromEvt(e); if (!cell) return
+    const pt = pointFromEvt(e)
     const sel = selectedRef.current
     if (!sel || sel.type !== 'unit') return
     const u = s.units.find(u=>u.id===sel.id); if (!u || u.type === 'harvester') return
 
-    // check if clicking on enemy
-    const enemyUnit = s.units.find(u => Math.round(u.x)===cell.x && Math.round(u.y)===cell.y && u.owner !== 'atreides')
-    const enemyBld = s.buildings.find(b => b.x===cell.x && b.y===cell.y && b.owner !== 'atreides')
-    if (enemyUnit) { commandAttack(s, u, enemyUnit.id, false); toast(`Атака: ${unitName(enemyUnit.type)}`) }
-    else if (enemyBld) { commandAttack(s, u, enemyBld.id, true); toast(`Атака: ${bldName(enemyBld.type)}`) }
-    else { commandMove(s, u, cell.x+0.5, cell.y+0.5); }
+    // check if clicking on enemy (any enemy unit/building near cursor)
+    const enemyUnit = pickUnitAt(s, pt.x, pt.y, undefined, 1.0)
+    const enemyBld = pickBuildingAt(s, pt.x, pt.y)
+    if (enemyUnit && enemyUnit.owner !== 'atreides') {
+      commandAttack(s, u, enemyUnit.id, false); toast(`Атака: ${unitName(enemyUnit.type)}`)
+    } else if (enemyBld && enemyBld.owner !== 'atreides') {
+      commandAttack(s, u, enemyBld.id, true); toast(`Атака: ${bldName(enemyBld.type)}`)
+    } else {
+      commandMove(s, u, cell.x+0.5, cell.y+0.5)
+    }
     forceRender(n=>n+1)
   }
 
@@ -611,9 +713,23 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
           <div className="shadow-2xl ring-1 ring-neutral-800 relative">
             <canvas ref={canvasRef}
               onMouseDown={handleClick} onContextMenu={handleRightClick}
-              onMouseMove={e => { const c = cellFromEvt(e); setHoverCell(c) }}
+              onWheel={onWheel}
+              onMouseMove={e => {
+                const c = cellFromEvt(e); setHoverCell(c)
+                // live cursor feedback (no re-render needed)
+                const pt = pointFromEvt(e)
+                const s2 = gameRef.current
+                const hovering = pickUnitAt(s2, pt.x, pt.y, undefined, 1.0) || pickBuildingAt(s2, pt.x, pt.y)
+                const canvas = canvasRef.current
+                if (canvas) {
+                  if (buildMode) canvas.style.cursor = 'crosshair'
+                  else if (hovering) canvas.style.cursor = 'pointer'
+                  else if (selectedRef.current?.type === 'unit') canvas.style.cursor = 'move'
+                  else canvas.style.cursor = 'default'
+                }
+              }}
               onMouseLeave={() => setHoverCell(null)}
-              className="block" style={{imageRendering:'pixelated', maxWidth:'100%', cursor: buildMode ? 'crosshair' : 'default'}} />
+              className="block" style={{ width: `${zoom * 100}%`, aspectRatio: `${gameRef.current.width} / ${gameRef.current.height}`, height: 'auto', cursor: 'default' }} />
             {/* Win/Lose overlay */}
             {s.over && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur">
@@ -645,7 +761,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
                   <div className="p-3 rounded-lg bg-neutral-800/60 space-y-2">
                     <div className="flex items-center gap-2">
                       <div className="w-10 h-10 ring-1 ring-neutral-600 rounded overflow-hidden">
-                        <img src={getUnitPreview(selUnit.type, 'atreides', 40)} alt="" className="w-full h-full" style={{imageRendering:'pixelated'}}/>
+                        <img src={getUnitPreview(selUnit.type, 'atreides', 48)} alt="" className="w-full h-full"/>
                       </div>
                       <div>
                         <div className="text-sm font-medium capitalize">{typeRu(selUnit.type)}</div>
@@ -660,7 +776,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
                   <div className="p-3 rounded-lg bg-neutral-800/60 space-y-2">
                     <div className="flex items-center gap-2">
                       <div className="w-10 h-10 ring-1 ring-neutral-600 rounded overflow-hidden">
-                        <img src={getBuildingPreview(selBld.type, 'atreides', 40)} alt="" className="w-full h-full" style={{imageRendering:'pixelated'}}/>
+                        <img src={getBuildingPreview(selBld.type, 'atreides', 48)} alt="" className="w-full h-full"/>
                       </div>
                       <div>
                         <div className="text-sm font-medium">{typeRu(selBld.type)}</div>
@@ -708,7 +824,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
                       <button key={t} onClick={()=>handleBuild(t)} disabled={!can}
                         className={`w-full flex items-center gap-2 p-2 rounded-lg transition-all ${can?'bg-neutral-800 hover:bg-neutral-700':'bg-neutral-900 opacity-40'}`}>
                         <div className="w-8 h-8 ring-1 ring-neutral-600 rounded overflow-hidden">
-                          <img src={getBuildingPreview(t, 'atreides', 32)} alt="" className="w-full h-full" style={{imageRendering:'pixelated'}}/>
+                          <img src={getBuildingPreview(t, 'atreides', 40)} alt="" className="w-full h-full"/>
                         </div>
                         <div className="flex-1 text-left">
                           <div className="text-sm">{typeRu(t)}</div>
@@ -757,7 +873,8 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
       <footer className="border-t border-neutral-800 bg-neutral-900 px-4 py-1.5 text-[11px] text-neutral-500 flex gap-4">
         <span><b className="text-neutral-300">ЛКМ</b> выбрать</span>
         <span><b className="text-neutral-300">ПКМ</b> приказ</span>
-        <span className="ml-auto">Тик: {s.tick} · Сложность: {difficulty==='easy'?'лёгкая':difficulty==='medium'?'средняя':'тяжёлая'}</span>
+        <span><b className="text-neutral-300">Колесо</b> зум</span>
+        <span className="ml-auto">Зум: {Math.round(zoom*100)}% · Тик: {s.tick} · Сложность: {difficulty==='easy'?'лёгкая':difficulty==='medium'?'средняя':'тяжёлая'}</span>
       </footer>
     </div>
   )

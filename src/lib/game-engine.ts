@@ -74,9 +74,9 @@ export interface GameState {
 
 // ---------- Config ----------
 export const CONFIG = {
-  harvester: { cost: 150, hp: 200, speed: 0.045, maxCargo: 60, buildTime: 120, dmg: 0, range: 0, atkCd: 0 },
-  soldier:   { cost: 60,  hp: 70,  speed: 0.07,  maxCargo: 0,  buildTime: 60,  dmg: 9,  range: 1.8, atkCd: 28 },
-  tank:      { cost: 200, hp: 160, speed: 0.05,  maxCargo: 0,  buildTime: 100, dmg: 22, range: 2.8, atkCd: 40 },
+  harvester: { cost: 150, hp: 200, speed: 0.08, maxCargo: 60, buildTime: 120, dmg: 0, range: 0, atkCd: 0 },
+  soldier:   { cost: 60,  hp: 70,  speed: 0.12,  maxCargo: 0,  buildTime: 60,  dmg: 9,  range: 1.8, atkCd: 28 },
+  tank:      { cost: 200, hp: 160, speed: 0.09,  maxCargo: 0,  buildTime: 100, dmg: 22, range: 2.8, atkCd: 40 },
   barracks:  { cost: 150, hp: 400, buildTime: 200 },
   factory:   { cost: 300, hp: 550, buildTime: 300 },
   turret:    { cost: 100, hp: 280, buildTime: 120, dmg: 16, range: 3.5, atkCd: 32 },
@@ -208,7 +208,22 @@ export function queueUnit(s: GameState, bld: Building, type: UnitType): boolean 
 
 // ---------- Unit commands (player) ----------
 export function commandMove(s: GameState, unit: Unit, tx: number, ty: number) {
-  unit.tx = tx; unit.ty = ty
+  // if target tile is not walkable, find nearest walkable tile nearby
+  let fx = tx, fy = ty
+  if (!isWalkable(s.terrain, Math.round(tx), Math.round(ty), s.width, s.height)) {
+    let found = false
+    for (let r = 1; r <= 6 && !found; r++) {
+      for (let dy = -r; dy <= r && !found; dy++) {
+        for (let dx = -r; dx <= r && !found; dx++) {
+          const cx = Math.round(tx) + dx, cy = Math.round(ty) + dy
+          if (isWalkable(s.terrain, cx, cy, s.width, s.height)) {
+            fx = cx + 0.5; fy = cy + 0.5; found = true
+          }
+        }
+      }
+    }
+  }
+  unit.tx = fx; unit.ty = fy
   unit.targetUnitId = null; unit.targetBldId = null
   unit.state = 'move'
 }
@@ -222,6 +237,22 @@ export function commandAttack(s: GameState, unit: Unit, targetId: number, isBuil
     unit.targetBldId = null
   }
   unit.state = 'attack'
+}
+
+// ---------- Picking (selection) ----------
+export function pickUnitAt(s: GameState, x: number, y: number, owner?: Faction, radius = 0.9): Unit | null {
+  let best: Unit | null = null
+  let bestD = radius
+  for (const u of s.units) {
+    if (owner && u.owner !== owner) continue
+    const d = dist(u.x, u.y, x, y)
+    if (d < bestD) { bestD = d; best = u }
+  }
+  return best
+}
+
+export function pickBuildingAt(s: GameState, x: number, y: number, owner?: Faction): Building | null {
+  return s.buildings.find(b => b.x === Math.floor(x) && b.y === Math.floor(y) && (!owner || b.owner === owner)) || null
 }
 
 // ---------- Core tick ----------
@@ -275,7 +306,7 @@ function updateBuildings(s: GameState) {
         if (target) {
           target.hp -= CONFIG.turret.dmg
           b.cooldown = CONFIG.turret.atkCd
-          if (target.hp <= 0) logEvent(s, 'death', `Турель уничтожила ${unitName(target.type)}`)
+          if (target.hp <= 0) logEvent(s, 'death', `Турель уничтожила ${'cargo' in target ? unitName((target as Unit).type) : bldName((target as Building).type)}`)
         }
       }
     }
@@ -444,7 +475,7 @@ function updateUnits(s: GameState) {
           (target as any).hp -= cfg.dmg
           u.cooldown = cfg.atkCd
           if (target.hp <= 0) {
-            logEvent(s, 'death', `${unitName(u.type)} (${factionRu(u.owner)}) уничтожил ${'type' in target ? unitName(target.type) : bldName((target as Building).type)}`)
+            logEvent(s, 'death', `${unitName(u.type)} (${factionRu(u.owner)}) уничтожил ${'cargo' in target ? unitName((target as Unit).type) : bldName((target as Building).type)}`)
             u.targetUnitId = null; u.targetBldId = null
             u.state = 'idle'
           }
@@ -461,8 +492,8 @@ function updateUnits(s: GameState) {
         u.state = 'idle'
       } else {
         moveToward(s, u, u.tx, u.ty, cfg.speed)
-        // auto-attack if enemy nearby en route
-        const enemy = findNearestEnemy(s, u.x, u.y, u.owner, cfg.range)
+        // auto-attack only if enemy is right next to us (don't break long moves)
+        const enemy = findNearestEnemy(s, u.x, u.y, u.owner, cfg.range * 0.6)
         if (enemy && 'type' in enemy) {
           u.targetUnitId = enemy.id
           u.state = 'attack'
@@ -477,23 +508,33 @@ function updateUnits(s: GameState) {
 function moveToward(s: GameState, u: Unit, tx: number, ty: number, speed: number) {
   const dx = tx - u.x, dy = ty - u.y
   const d = Math.hypot(dx, dy)
-  if (d < 0.01) return
-  let nx = u.x + (dx / d) * speed
-  let ny = u.y + (dy / d) * speed
-  // simple obstacle avoidance: check target tile walkability
-  const tileX = Math.round(nx), tileY = Math.round(ny)
-  if (!isWalkable(s.terrain, tileX, tileY, s.width, s.height)) {
-    // try to slide
-    if (isWalkable(s.terrain, Math.round(u.x + (dx / d) * speed), Math.round(u.y), s.width, s.height)) {
-      ny = u.y
-    } else if (isWalkable(s.terrain, Math.round(u.x), Math.round(u.y + (dy / d) * speed), s.width, s.height)) {
-      nx = u.x
-    } else {
-      return // stuck
+  if (d < 0.05) return
+  const ux = (dx / d) * speed
+  const uy = (dy / d) * speed
+  // candidate positions: full diagonal, x-only, y-only
+  const candidates = [
+    [u.x + ux, u.y + uy],
+    [u.x + ux, u.y],        // x-only slide
+    [u.x, u.y + uy],        // y-only slide
+  ]
+  for (const [nx, ny] of candidates) {
+    const tileX = Math.round(nx), tileY = Math.round(ny)
+    if (isWalkable(s.terrain, tileX, tileY, s.width, s.height)) {
+      u.x = Math.max(0.5, Math.min(s.width - 0.5, nx))
+      u.y = Math.max(0.5, Math.min(s.height - 0.5, ny))
+      return
     }
   }
-  u.x = Math.max(0.5, Math.min(s.width - 0.5, nx))
-  u.y = Math.max(0.5, Math.min(s.height - 0.5, ny))
+  // all blocked — try perpendicular nudge to unstick
+  const nudge = 0.04
+  const perp = [[u.x + uy, u.y - ux], [u.x - uy, u.y + ux], [u.x + ux*2, u.y], [u.x, u.y + uy*2]]
+  for (const [nx, ny] of perp) {
+    if (isWalkable(s.terrain, Math.round(nx), Math.round(ny), s.width, s.height)) {
+      u.x = Math.max(0.5, Math.min(s.width - 0.5, nx + nudge * (Math.random()-0.5)))
+      u.y = Math.max(0.5, Math.min(s.height - 0.5, ny + nudge * (Math.random()-0.5)))
+      return
+    }
+  }
 }
 
 // ---------- Worm ----------
