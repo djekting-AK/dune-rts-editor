@@ -293,8 +293,12 @@ function updateBuildings(s: GameState) {
         if (spawn) {
           const u = makeUnit(s, q.type, b.owner, spawn.x, spawn.y)
           s.units.push(u)
+          b.queue.shift()
+          if (b.owner === 'atreides') logEvent(s, 'build', `Создан: ${unitName(q.type)}`)
+        } else {
+          // no space — wait until a tile frees up (don't lose the queued unit)
+          q.progress = cfg.buildTime
         }
-        b.queue.shift()
       }
     }
 
@@ -316,17 +320,20 @@ function updateBuildings(s: GameState) {
 }
 
 function findSpawnTile(s: GameState, b: Building): { x: number; y: number } | null {
-  for (let r = 1; r <= 3; r++) {
+  for (let r = 1; r <= 4; r++) {
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
         const x = b.x + dx, y = b.y + dy
-        if (isWalkable(s.terrain, x, y, s.width, s.height) && !s.units.some(u => Math.round(u.x) === x && Math.round(u.y) === y)) {
-          return { x: x + 0.5, y: y + 0.5 }
-        }
+        if (!isWalkable(s.terrain, x, y, s.width, s.height)) continue
+        // skip if another building occupies this tile
+        if (s.buildings.some(bb => bb.x === x && bb.y === y)) continue
+        // skip if another unit is already here
+        if (s.units.some(u => Math.round(u.x) === x && Math.round(u.y) === y)) continue
+        return { x: x + 0.5, y: y + 0.5 }
       }
     }
   }
-  return { x: b.x + 0.5, y: b.y + 1.5 }
+  return null
 }
 
 function findNearestEnemy(s: GameState, x: number, y: number, owner: Faction, range: number): Unit | Building | null {

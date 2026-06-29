@@ -470,7 +470,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
   const [buildMode, setBuildMode] = useState<BuildingType | null>(null)
   const [hoverCell, setHoverCell] = useState<{x:number,y:number}|null>(null)
   const [showHelp, setShowHelp] = useState(false)
-  const [zoom, setZoom] = useState(1.3)
+  const [zoom, setZoom] = useState(1)
   const selectedRef = useRef(selected); selectedRef.current = selected
   const buildModeRef = useRef(buildMode); buildModeRef.current = buildMode
   const pausedRef = useRef(paused); pausedRef.current = paused
@@ -488,7 +488,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
   }
   // reset zoom on Esc
   useEffect(() => {
-    const k = (e: KeyboardEvent) => { if (e.key === 'Escape') { setBuildMode(null); setZoom(1.3) } }
+    const k = (e: KeyboardEvent) => { if (e.key === 'Escape') { setBuildMode(null); setZoom(1) } }
     window.addEventListener('keydown', k)
     return () => window.removeEventListener('keydown', k)
   }, [])
@@ -600,9 +600,32 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
   }
 
   const handleClick = (e: React.MouseEvent) => {
+    // Only respond to LEFT mouse button
+    if (e.button !== 0) return
     const s = gameRef.current
     const cell = cellFromEvt(e); if (!cell) return
     const pt = pointFromEvt(e)
+
+    // Shift + Left click = move order (alternative to right click for touchpads)
+    if (e.shiftKey) {
+      const sel = selectedRef.current
+      if (sel?.type === 'unit') {
+        const u = s.units.find(u=>u.id===sel.id)
+        if (u && u.type !== 'harvester') {
+          const enemyUnit = pickUnitAt(s, pt.x, pt.y, undefined, 1.0)
+          const enemyBld = pickBuildingAt(s, pt.x, pt.y)
+          if (enemyUnit && enemyUnit.owner !== 'atreides') {
+            commandAttack(s, u, enemyUnit.id, false); toast(`⚔ Атака: ${unitName(enemyUnit.type)}`)
+          } else if (enemyBld && enemyBld.owner !== 'atreides') {
+            commandAttack(s, u, enemyBld.id, true); toast(`⚔ Атака: ${bldName(enemyBld.type)}`)
+          } else {
+            commandMove(s, u, cell.x+0.5, cell.y+0.5)
+            toast(`→ Движение (${cell.x},${cell.y})`)
+          }
+          forceRender(n=>n+1); return
+        }
+      }
+    }
 
     // building placement
     const bm = buildModeRef.current
@@ -631,18 +654,31 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
     const cell = cellFromEvt(e); if (!cell) return
     const pt = pointFromEvt(e)
     const sel = selectedRef.current
-    if (!sel || sel.type !== 'unit') return
-    const u = s.units.find(u=>u.id===sel.id); if (!u || u.type === 'harvester') return
+    if (!sel) {
+      toast.info('Сначала выберите юнита (ЛКМ)')
+      return
+    }
+    if (sel.type !== 'unit') {
+      toast.info('Здания нельзя двигать — выберите юнита')
+      return
+    }
+    const u = s.units.find(u=>u.id===sel.id)
+    if (!u) { toast.error('Юнит потерян'); setSelected(null); return }
+    if (u.type === 'harvester') {
+      toast.info('Доставщик добывает спайс автоматически')
+      return
+    }
 
     // check if clicking on enemy (any enemy unit/building near cursor)
     const enemyUnit = pickUnitAt(s, pt.x, pt.y, undefined, 1.0)
     const enemyBld = pickBuildingAt(s, pt.x, pt.y)
     if (enemyUnit && enemyUnit.owner !== 'atreides') {
-      commandAttack(s, u, enemyUnit.id, false); toast(`Атака: ${unitName(enemyUnit.type)}`)
+      commandAttack(s, u, enemyUnit.id, false); toast(`⚔ Атака: ${unitName(enemyUnit.type)}`)
     } else if (enemyBld && enemyBld.owner !== 'atreides') {
-      commandAttack(s, u, enemyBld.id, true); toast(`Атака: ${bldName(enemyBld.type)}`)
+      commandAttack(s, u, enemyBld.id, true); toast(`⚔ Атака: ${bldName(enemyBld.type)}`)
     } else {
       commandMove(s, u, cell.x+0.5, cell.y+0.5)
+      toast(`→ Движение (${cell.x},${cell.y})`)
     }
     forceRender(n=>n+1)
   }
@@ -700,10 +736,13 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
 
       {showHelp && (
         <div className="bg-neutral-900 border-b border-neutral-800 px-4 py-2 text-xs text-neutral-400 flex gap-4 flex-wrap">
-          <span><b className="text-neutral-200">ЛКМ</b> — выбрать юнит/здание</span>
-          <span><b className="text-neutral-200">ПКМ</b> — движение/атака</span>
-          <span><b className="text-neutral-200">Доставщик</b> — сам ищет спайс и возвращает кредиты</span>
-          <span><b className="text-neutral-200">Червь</b> — ест юнитов на песке</span>
+          <span><b className="text-emerald-400">ЛКМ</b> — выбрать юнит/здание</span>
+          <span><b className="text-amber-400">ПКМ</b> — приказ движения/атаки</span>
+          <span><b className="text-amber-400">Shift+ЛКМ</b> — приказ (если нет ПКМ)</span>
+          <span><b className="text-neutral-200">Колесо</b> — зум</span>
+          <span><b className="text-neutral-200">Esc</b> — сброс</span>
+          <span><b className="text-neutral-200">Доставщик</b> — авто-добыча спайса</span>
+          <span><b className="text-orange-400">Червь</b> — ест юнитов на песке</span>
         </div>
       )}
 
@@ -871,8 +910,9 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
       </div>
 
       <footer className="border-t border-neutral-800 bg-neutral-900 px-4 py-1.5 text-[11px] text-neutral-500 flex gap-4">
-        <span><b className="text-neutral-300">ЛКМ</b> выбрать</span>
-        <span><b className="text-neutral-300">ПКМ</b> приказ</span>
+        <span><b className="text-emerald-400">ЛКМ</b> выбрать</span>
+        <span><b className="text-amber-400">ПКМ</b> приказ</span>
+        <span><b className="text-amber-400">Shift+ЛКМ</b> приказ</span>
         <span><b className="text-neutral-300">Колесо</b> зум</span>
         <span className="ml-auto">Зум: {Math.round(zoom*100)}% · Тик: {s.tick} · Сложность: {difficulty==='easy'?'лёгкая':difficulty==='medium'?'средняя':'тяжёлая'}</span>
       </footer>
