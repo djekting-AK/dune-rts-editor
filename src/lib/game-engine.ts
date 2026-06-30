@@ -32,6 +32,11 @@ export interface Unit {
   maxCargo: number
   cooldown: number   // attack cooldown
   harvestTime: number
+  homeX: number      // return point after combat (auto-attack origin)
+  homeY: number
+  stuckTicks: number // counter to detect being stuck
+  lastX: number
+  lastY: number
 }
 
 export interface Worm {
@@ -219,6 +224,8 @@ export function makeUnit(s: GameState, type: UnitType, owner: Faction, x: number
     targetUnitId: null, targetBldId: null,
     cargo: 0, maxCargo: c.maxCargo,
     cooldown: 0, harvestTime: 0,
+    homeX: x, homeY: y,
+    stuckTicks: 0, lastX: x, lastY: y,
   }
 }
 
@@ -538,6 +545,9 @@ function updateUnits(s: GameState) {
     if (u.state === 'idle') {
       const enemy = findNearestEnemy(s, u.x, u.y, u.owner, cfg.range + 2)
       if (enemy) {
+        // save current position as home to return to after combat
+        u.homeX = u.x
+        u.homeY = u.y
         if ('cargo' in enemy) u.targetUnitId = (enemy as Unit).id
         else if ('type' in enemy && (enemy as any).type) u.targetBldId = (enemy as Building).id
         u.state = 'attack'
@@ -548,7 +558,35 @@ function updateUnits(s: GameState) {
       let target: Unit | Building | null = null
       if (u.targetUnitId) target = s.units.find(x => x.id === u.targetUnitId) || null
       if (!target && u.targetBldId) target = s.buildings.find(x => x.id === u.targetBldId) || null
-      if (!target) { u.state = 'idle'; u.targetUnitId = null; u.targetBldId = null; continue }
+      if (!target) {
+        // target destroyed — return home or find nearest free tile nearby
+        const homeD = dist(u.x, u.y, u.homeX, u.homeY)
+        if (homeD > 1.5) {
+          // go back home
+          u.tx = u.homeX
+          u.ty = u.homeY
+          u.state = 'move'
+        } else {
+          // already near home — just find a free adjacent tile if current is occupied
+          const curTileX = Math.round(u.x), curTileY = Math.round(u.y)
+          if (isTileFree(s, curTileX, curTileY, u.id)) {
+            u.state = 'idle'
+          } else {
+            // find nearest free tile adjacent
+            const free = findNearestFreeTile(s, u.x, u.y, u.id, 3)
+            if (free) {
+              u.tx = free.x
+              u.ty = free.y
+              u.state = 'move'
+            } else {
+              u.state = 'idle'
+            }
+          }
+        }
+        u.targetUnitId = null
+        u.targetBldId = null
+        continue
+      }
       const tx = 'type' in target && (target as any).type ? (target as any).x : (target as Building).x + 0.5
       const ty = 'type' in target && (target as any).type ? (target as any).y : (target as Building).y + 0.5
       const d = dist(u.x, u.y, tx, ty)
@@ -569,46 +607,181 @@ function updateUnits(s: GameState) {
       if (d < 0.4) u.state = 'idle'
       else {
         moveToward(s, u, u.tx, u.ty, cfg.speed)
-        const enemy = findNearestEnemy(s, u.x, u.y, u.owner, cfg.range * 0.6)
-        if (enemy && 'cargo' in enemy) { u.targetUnitId = (enemy as Unit).id; u.state = 'attack' }
+        // auto-attack only if enemy is right next to us (don't break long moves)
+        const enemy = findNearestEnemy(s, u.x, u.y, u.owner, cfg.range * 0.5)
+        if (enemy && 'cargo' in enemy) {
+          u.homeX = u.x; u.homeY = u.y
+          u.targetUnitId = (enemy as Unit).id
+          u.state = 'attack'
+        }
       }
     }
+
+    // stuck detection — if unit hasn't moved much in a while, pick new target
+    if (Math.abs(u.x - u.lastX) < 0.01 && Math.abs(u.y - u.lastY) < 0.01) {
+      u.stuckTicks++
+      if (u.stuckTicks > 15 && u.state !== 'idle') {
+        // give up current move target, become idle (will re-acquire)
+        if (u.state === 'move') {
+          u.state = 'idle'
+          u.stuckTicks = 0
+        }
+      }
+    } else {
+      u.stuckTicks = 0
+    }
+    u.lastX = u.x
+    u.lastY = u.y
   }
   s.units = s.units.filter(u => u.hp > 0)
+}
+
+// find nearest free tile (walkable + no unit + no building) within radius
+function findNearestFreeTile(s: GameState, x: number, y: number, exceptUnitId: number, maxR: number): { x: number; y: number } | null {
+  for (let r = 1; r <= maxR; r++) {
+    let best: { x: number; y: number } | null = null
+    let bestD = 99
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue
+        const cx = Math.round(x) + dx, cy = Math.round(y) + dy
+        if (!isTileFree(s, cx, cy, exceptUnitId)) continue
+        const d = dist(x, y, cx + 0.5, cy + 0.5)
+        if (d < bestD) { bestD = d; best = { x: cx + 0.5, y: cy + 0.5 } }
+      }
+    }
+    if (best) return best
+  }
+  return null
+}
+
+// ---------- Pathfinding (BFS) ----------
+// Cached BFS path from a tile to a target tile, avoiding blocked tiles & occupied tiles.
+// Returns next step {x,y} or null if no path found within maxDepth.
+const pathCache = new Map<string, { x: number; y: number } | null>()
+
+function isTileFree(s: GameState, x: number, y: number, exceptUnitId: number): boolean {
+  if (!isWalkable(s.terrain, x, y, s.width, s.height)) return false
+  if (s.buildings.some(b => b.x === x && b.y === y)) return false
+  const other = s.units.find(o => o.id !== exceptUnitId && Math.round(o.x) === x && Math.round(o.y) === y)
+  if (other) return false
+  return true
+}
+
+function isTilePassable(s: GameState, x: number, y: number, exceptUnitId: number): boolean {
+  // passable = walkable + no building (units can pass through each other's tiles
+  // but will stop on free tiles; we allow temporary overlap during movement)
+  if (!isWalkable(s.terrain, x, y, s.width, s.height)) return false
+  if (s.buildings.some(b => b.x === x && b.y === y)) return false
+  return true
+}
+
+function findNextStep(s: GameState, fromX: number, fromY: number, toX: number, toY: number, unitId: number): { x: number; y: number } | null {
+  const fx = Math.round(fromX), fy = Math.round(fromY)
+  const tx = Math.round(toX), ty = Math.round(toY)
+  if (fx === tx && fy === ty) return { x: tx + 0.5, y: ty + 0.5 }
+  // BFS
+  const w = s.width, h = s.height
+  const visited = new Uint8Array(w * h)
+  const cameFrom = new Int32Array(w * h).fill(-1)
+  const queue: number[] = [fy * w + fx]
+  visited[fy * w + fx] = 1
+  const targetIdx = ty * w + tx
+  const maxDepth = 120
+  let depth = 0
+  const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]]
+  let found = false
+  while (queue.length && depth < maxDepth) {
+    const cur = queue.shift()!
+    depth++
+    if (cur === targetIdx) { found = true; break }
+    const cx = cur % w, cy = Math.floor(cur / w)
+    for (const [dx, dy] of dirs) {
+      const nx = cx + dx, ny = cy + dy
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+      const ni = ny * w + nx
+      if (visited[ni]) continue
+      // target tile is always passable even if occupied (we just need to reach adjacent)
+      if (ni !== targetIdx && !isTilePassable(s, nx, ny, unitId)) continue
+      visited[ni] = 1
+      cameFrom[ni] = cur
+      queue.push(ni)
+    }
+  }
+  if (!found && visited[targetIdx] === 0) {
+    // no path — find closest visited tile to target as fallback
+    return null
+  }
+  // reconstruct: walk back from target to find first step
+  let cur = targetIdx
+  let prev = cameFrom[cur]
+  if (prev < 0) return null
+  while (prev !== fy * w + fx && cameFrom[prev] >= 0) {
+    cur = prev
+    prev = cameFrom[cur]
+  }
+  const nx = cur % w, ny = Math.floor(cur / w)
+  return { x: nx + 0.5, y: ny + 0.5 }
 }
 
 function moveToward(s: GameState, u: Unit, tx: number, ty: number, speed: number) {
   const dx = tx - u.x, dy = ty - u.y
   const d = Math.hypot(dx, dy)
   if (d < 0.05) return
-  const ux = (dx / d) * speed
-  const uy = (dy / d) * speed
-  const candidates = [
+  // If close to target, move directly (smooth final approach)
+  if (d < speed * 2) {
+    const tr = Math.round(tx), tc = Math.round(ty)
+    const free = isTileFree(s, tr, tc, u.id) || (Math.round(u.x) === tr && Math.round(u.y) === tc)
+    if (free || d < 0.4) {
+      u.x = Math.max(0.5, Math.min(s.width - 0.5, u.x + (dx / d) * Math.min(speed, d)))
+      u.y = Math.max(0.5, Math.min(s.height - 0.5, u.y + (dy / d) * Math.min(speed, d)))
+      return
+    }
+  }
+  // Try direct movement first (fast path — most of the time this works)
+  const ux = (dx / d) * speed, uy = (dy / d) * speed
+  const directCandidates = [
     [u.x + ux, u.y + uy],
     [u.x + ux, u.y],
     [u.x, u.y + uy],
   ]
-  for (const [nx, ny] of candidates) {
+  for (const [nx, ny] of directCandidates) {
     const tileX = Math.round(nx), tileY = Math.round(ny)
     if (!isWalkable(s.terrain, tileX, tileY, s.width, s.height)) continue
-    // 1 unit per tile — don't stack on another unit (unless it's our target/very close)
-    const other = s.units.find(o => o.id !== u.id && Math.round(o.x) === tileX && Math.round(o.y) === tileY)
-    if (other && dist(nx, ny, other.x, other.y) < 0.6) continue
+    if (s.buildings.some(b => b.x === tileX && b.y === tileY)) continue
+    const other = s.units.find(o => o.id !== u.id && Math.round(o.x) === tileX && Math.round(o.y) === tileY && dist(o.x, o.y, nx, ny) < 0.5)
+    if (other) continue
     u.x = Math.max(0.5, Math.min(s.width - 0.5, nx))
     u.y = Math.max(0.5, Math.min(s.height - 0.5, ny))
     return
   }
-  // perpendicular nudge to unstick
-  const perp = [[u.x + uy, u.y - ux], [u.x - uy, u.y + ux]]
-  for (const [nx, ny] of perp) {
-    if (isWalkable(s.terrain, Math.round(nx), Math.round(ny), s.width, s.height)) {
-      const other = s.units.find(o => o.id !== u.id && Math.round(o.x) === Math.round(nx) && Math.round(o.y) === Math.round(ny))
+  // Direct path blocked — use BFS pathfinding (every few ticks to save CPU)
+  // Only run BFS if unit is stuck (hasn't moved this tick would be detected by caller)
+  const step = findNextStep(s, u.x, u.y, tx, ty, u.id)
+  if (step) {
+    const sdx = step.x - u.x, sdy = step.y - u.y
+    const sd = Math.hypot(sdx, sdy)
+    if (sd > 0.05) {
+      const mx = (sdx / sd) * Math.min(speed, sd)
+      const my = (sdy / sd) * Math.min(speed, sd)
+      const ntx = Math.round(u.x + mx), nty = Math.round(u.y + my)
+      const other = s.units.find(o => o.id !== u.id && Math.round(o.x) === ntx && Math.round(o.y) === nty && dist(o.x, o.y, u.x + mx, u.y + my) < 0.5)
       if (!other) {
-        u.x = Math.max(0.5, Math.min(s.width - 0.5, nx))
-        u.y = Math.max(0.5, Math.min(s.height - 0.5, ny))
+        u.x = Math.max(0.5, Math.min(s.width - 0.5, u.x + mx))
+        u.y = Math.max(0.5, Math.min(s.height - 0.5, u.y + my))
         return
       }
     }
+  }
+  // last resort: try perpendicular nudge
+  const perp = [[u.x + uy, u.y - ux], [u.x - uy, u.y + ux]]
+  for (const [nx, ny] of perp) {
+    if (!isWalkable(s.terrain, Math.round(nx), Math.round(ny), s.width, s.height)) continue
+    const other = s.units.find(o => o.id !== u.id && Math.round(o.x) === Math.round(nx) && Math.round(o.y) === Math.round(ny) && dist(o.x, o.y, nx, ny) < 0.5)
+    if (other) continue
+    u.x = Math.max(0.5, Math.min(s.width - 0.5, nx))
+    u.y = Math.max(0.5, Math.min(s.height - 0.5, ny))
+    return
   }
 }
 
