@@ -543,7 +543,7 @@ export const FACTION_COLORS = {
 export type Faction = keyof typeof FACTION_COLORS
 
 // ---------- Building rendering (detailed, volumetric) ----------
-export type BuildingType = 'palace' | 'barracks' | 'factory' | 'turret' | 'refinery'
+export type BuildingType = 'palace' | 'barracks' | 'factory' | 'turret' | 'refinery' | 'generator'
 
 const buildingCache = new Map<string, HTMLCanvasElement>()
 
@@ -683,6 +683,34 @@ function renderBuilding(type: BuildingType, faction: Faction): HTMLCanvasElement
     px(ctx, 5, 17, 1, 3, '#a07020'); px(ctx, s - 5, 17, 1, 3, '#a07020')
     // spice stain
     px(ctx, s/2 - 2, s - 5, 4, 1, '#e85d2f')
+  } else if (type === 'generator') {
+    // base platform
+    rrect(ctx, 4, 14, s - 8, s - 18, 2, col.dark)
+    rrect(ctx, 5, 15, s - 10, s - 20, 1, col.primary)
+    // central power core (glowing)
+    const coreGrad = ctx.createRadialGradient(s/2, s/2, 1, s/2, s/2, 8)
+    coreGrad.addColorStop(0, '#ffe060')
+    coreGrad.addColorStop(0.4, '#ff9020')
+    coreGrad.addColorStop(1, 'rgba(255,144,32,0)')
+    ctx.fillStyle = coreGrad
+    ctx.fillRect(s/2 - 9, s/2 - 9, 18, 18)
+    // core inner
+    ctx.fillStyle = '#fff0a0'
+    ctx.beginPath(); ctx.arc(s/2, s/2, 3, 0, Math.PI*2); ctx.fill()
+    // cooling fins
+    ctx.fillStyle = col.light
+    ctx.fillRect(5, 16, 2, s - 22)
+    ctx.fillRect(s - 7, 16, 2, s - 22)
+    // energy arcs (lightning)
+    ctx.strokeStyle = '#ffe060'; ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(s/2, 6); ctx.lineTo(s/2 - 3, 10); ctx.lineTo(s/2 + 2, 13); ctx.lineTo(s/2 - 1, 16)
+    ctx.stroke()
+    // top vent
+    px(ctx, s/2 - 4, 12, 8, 1, col.trim)
+    // base shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.3)'
+    ctx.fillRect(5, s - 6, s - 10, 2)
   }
 
   buildingCache.set(key, c)
@@ -796,7 +824,7 @@ export function drawUnit(ctx: CanvasRenderingContext2D, type: UnitType, faction:
   ctx.drawImage(img, px_ - TILE_SIZE / 2, py_ - TILE_SIZE / 2 + bob)
 }
 
-// ---------- Worm rendering (detailed) ----------
+// ---------- Worm rendering (detailed, Shai-Hulud) ----------
 let wormCache: HTMLCanvasElement | null = null
 function renderWorm(): HTMLCanvasElement {
   if (wormCache) return wormCache
@@ -804,32 +832,88 @@ function renderWorm(): HTMLCanvasElement {
   c.width = TILE_SIZE; c.height = TILE_SIZE
   const ctx = c.getContext('2d')!
   const s = TILE_SIZE
-  // shadow
-  ctx.fillStyle = 'rgba(0,0,0,0.3)'
-  ctx.beginPath(); ctx.ellipse(s/2, s - 4, 13, 4, 0, 0, Math.PI*2); ctx.fill()
-  // body (segmented)
-  ctx.fillStyle = '#8b4513'
-  ctx.beginPath(); ctx.ellipse(s/2, s/2 + 2, 14, 8, 0, 0, Math.PI*2); ctx.fill()
-  // body segments (rings)
-  ctx.fillStyle = '#6b3010'
-  for (let i = -3; i <= 3; i++) {
-    px(ctx, s/2 + i * 4 - 1, s/2 - 4, 2, 12, '#6b3010')
+  const cx = s / 2, cy = s / 2
+
+  // ground shadow (sand displacement)
+  ctx.fillStyle = 'rgba(60,30,5,0.45)'
+  ctx.beginPath(); ctx.ellipse(cx, s - 5, 15, 4, 0, 0, Math.PI * 2); ctx.fill()
+
+  // body — long segmented worm emerging from sand, horizontal orientation
+  // tail (tapering, behind)
+  ctx.fillStyle = '#7a3a10'
+  ctx.beginPath()
+  ctx.moveTo(2, cy + 1)
+  ctx.quadraticCurveTo(cx - 8, cy - 3, cx - 4, cy)
+  ctx.lineTo(cx - 4, cy + 6)
+  ctx.quadraticCurveTo(cx - 8, cy + 7, 2, cy + 7)
+  ctx.fill()
+
+  // main body segments (rounded, overlapping)
+  const segments = [
+    { x: cx - 8, y: cy, r: 5, shade: '#8b4513' },
+    { x: cx - 4, y: cy - 1, r: 6, shade: '#9a5018' },
+    { x: cx, y: cy - 2, r: 7, shade: '#a85820' },
+    { x: cx + 4, y: cy - 1, r: 7, shade: '#9a5018' },
+  ]
+  for (const seg of segments) {
+    ctx.fillStyle = seg.shade
+    ctx.beginPath(); ctx.ellipse(seg.x, seg.y + 3, seg.r, seg.r - 1, 0, 0, Math.PI * 2); ctx.fill()
   }
-  // body highlight
-  ctx.fillStyle = '#a85820'
-  px(ctx, s/2 - 8, s/2 - 4, 16, 1, '#a85820')
-  px(ctx, s/2 - 6, s/2 - 5, 12, 1, '#c06830')
-  // mouth opening
-  rrect(ctx, s/2 - 6, s/2 - 1, 12, 5, 1, '#3a1010')
-  // teeth
-  ctx.fillStyle = '#fff'
+
+  // segment ring lines (texture)
+  ctx.strokeStyle = '#5a2810'; ctx.lineWidth = 1
+  for (let i = -2; i <= 2; i++) {
+    const x = cx + i * 4
+    ctx.beginPath()
+    ctx.moveTo(x, cy - 3)
+    ctx.quadraticCurveTo(x - 1, cy + 3, x, cy + 7)
+    ctx.stroke()
+  }
+
+  // top highlight (light from above)
+  ctx.fillStyle = '#c07030'
+  ctx.beginPath(); ctx.ellipse(cx, cy - 1, 10, 2, 0, 0, Math.PI * 2); ctx.fill()
+  ctx.fillStyle = '#e09040'
+  ctx.beginPath(); ctx.ellipse(cx - 2, cy - 2, 6, 1, 0, 0, Math.PI * 2); ctx.fill()
+
+  // mouth — circular maw at the front (right side)
+  const mouthX = cx + 7, mouthY = cy + 2
+  // outer lips (darker)
+  ctx.fillStyle = '#3a1008'
+  ctx.beginPath(); ctx.ellipse(mouthX, mouthY, 5, 4, 0, 0, Math.PI * 2); ctx.fill()
+  // inner mouth (glowing red)
+  const mouthGrad = ctx.createRadialGradient(mouthX, mouthY, 0, mouthX, mouthY, 4)
+  mouthGrad.addColorStop(0, '#ff4020')
+  mouthGrad.addColorStop(0.5, '#a02010')
+  mouthGrad.addColorStop(1, '#3a1008')
+  ctx.fillStyle = mouthGrad
+  ctx.beginPath(); ctx.ellipse(mouthX, mouthY, 3.5, 3, 0, 0, Math.PI * 2); ctx.fill()
+  // teeth — triangular, ring around mouth
+  ctx.fillStyle = '#fff8e0'
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2
+    const tx = mouthX + Math.cos(a) * 4
+    const ty = mouthY + Math.sin(a) * 3
+    ctx.beginPath()
+    ctx.moveTo(tx, ty)
+    ctx.lineTo(mouthX + Math.cos(a) * 2.5, mouthY + Math.sin(a) * 1.8)
+    ctx.lineTo(mouthX + Math.cos(a + 0.4) * 4, mouthY + Math.sin(a + 0.4) * 3)
+    ctx.closePath(); ctx.fill()
+  }
+
+  // sand spray at base (emerging effect)
+  ctx.fillStyle = 'rgba(200,150,70,0.6)'
   for (let i = 0; i < 6; i++) {
-    px(ctx, s/2 - 5 + i * 2, s/2 - 1, 1, 2, '#fff')
-    px(ctx, s/2 - 5 + i * 2, s/2 + 2, 1, 2, '#fff')
+    const px2 = 3 + Math.random() * 6
+    const py2 = s - 8 + Math.random() * 5
+    ctx.fillRect(px2, py2, 1, 1)
   }
-  // inner glow
-  ctx.fillStyle = 'rgba(232,93,47,0.4)'
-  ctx.fillRect(s/2 - 5, s/2, 10, 2)
+  for (let i = 0; i < 4; i++) {
+    const px2 = s - 8 + Math.random() * 6
+    const py2 = s - 8 + Math.random() * 5
+    ctx.fillRect(px2, py2, 1, 1)
+  }
+
   wormCache = c
   return c
 }
@@ -920,4 +1004,128 @@ export function getUnitPreview(type: UnitType, faction: Faction, size = 40): str
   const img = renderUnit(type, faction)
   ctx.drawImage(img, 0, 0)
   return c.toDataURL()
+}
+
+// ---------- Projectile ----------
+export function drawProjectile(ctx: CanvasRenderingContext2D, x: number, y: number, sx: number, sy: number, color: string) {
+  // tracer trail
+  const dx = x - sx, dy = y - sy
+  const d = Math.hypot(dx, dy) || 1
+  const trailLen = Math.min(8, d)
+  const tx = x - (dx / d) * trailLen
+  const ty = y - (dy / d) * trailLen
+  const grad = ctx.createLinearGradient(tx, ty, x, y)
+  grad.addColorStop(0, 'rgba(255,200,100,0)')
+  grad.addColorStop(1, color)
+  ctx.strokeStyle = grad
+  ctx.lineWidth = 2
+  ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(x, y); ctx.stroke()
+  // bright head
+  ctx.fillStyle = '#fff'
+  ctx.beginPath(); ctx.arc(x, y, 1.5, 0, Math.PI * 2); ctx.fill()
+  ctx.fillStyle = color
+  ctx.beginPath(); ctx.arc(x, y, 2.5, 0, Math.PI * 2); ctx.globalAlpha = 0.5; ctx.fill(); ctx.globalAlpha = 1
+}
+
+// ---------- Explosion ----------
+export function drawExplosion(ctx: CanvasRenderingContext2D, x: number, y: number, frame: number, maxFrame: number, size: number, color: string) {
+  const t = frame / maxFrame
+  const r = (1 - Math.abs(t - 0.3)) * 8 * size
+  // outer glow
+  const grad = ctx.createRadialGradient(x, y, 0, x, y, r + 4)
+  grad.addColorStop(0, `rgba(255,240,180,${1 - t})`)
+  grad.addColorStop(0.3, color)
+  grad.addColorStop(0.7, `rgba(180,60,20,${0.7 * (1 - t)})`)
+  grad.addColorStop(1, 'rgba(80,20,0,0)')
+  ctx.fillStyle = grad
+  ctx.fillRect(x - r - 4, y - r - 4, (r + 4) * 2, (r + 4) * 2)
+  // core flash
+  if (t < 0.4) {
+    ctx.fillStyle = `rgba(255,255,255,${0.9 - t * 2})`
+    ctx.beginPath(); ctx.arc(x, y, r * 0.4, 0, Math.PI * 2); ctx.fill()
+  }
+  // sparks
+  if (t < 0.6) {
+    ctx.fillStyle = '#ffe080'
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + frame * 0.1
+      const sr = r * 0.8
+      ctx.fillRect(x + Math.cos(a) * sr, y + Math.sin(a) * sr, 1, 1)
+    }
+  }
+}
+
+// ---------- Muzzle flash ----------
+export function drawMuzzleFlash(ctx: CanvasRenderingContext2D, x: number, y: number, frame: number) {
+  const r = 4 - frame
+  if (r <= 0) return
+  ctx.fillStyle = `rgba(255,240,150,${0.8 - frame * 0.2})`
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill()
+  ctx.fillStyle = `rgba(255,180,60,${0.5 - frame * 0.15})`
+  ctx.beginPath(); ctx.arc(x, y, r + 2, 0, Math.PI * 2); ctx.fill()
+}
+
+// ---------- Attack range indicator (for selected turret/unit) ----------
+export function drawRangeIndicator(ctx: CanvasRenderingContext2D, x: number, y: number, range: number, color = '#4ade80') {
+  ctx.save()
+  // subtle fill
+  ctx.fillStyle = color
+  ctx.globalAlpha = 0.12
+  ctx.beginPath(); ctx.arc(x, y, range * TILE_SIZE, 0, Math.PI * 2); ctx.fill()
+  // dashed ring
+  ctx.strokeStyle = color
+  ctx.lineWidth = 2.5
+  ctx.setLineDash([6, 4])
+  ctx.globalAlpha = 0.85
+  ctx.beginPath(); ctx.arc(x, y, range * TILE_SIZE, 0, Math.PI * 2); ctx.stroke()
+  ctx.setLineDash([])
+  ctx.restore()
+}
+
+// ---------- Fog of war overlay ----------
+// exploredCells: boolean[] (ever seen), visibleCells: boolean[] (currently visible)
+export function drawFogOfWar(
+  ctx: CanvasRenderingContext2D,
+  explored: boolean[], visible: boolean[],
+  w: number, h: number,
+) {
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x
+      if (visible[i]) continue
+      const ox = x * TILE_SIZE, oy = y * TILE_SIZE
+      if (explored[i]) {
+        // explored but not currently visible — dark overlay, terrain still faintly visible
+        ctx.fillStyle = 'rgba(10,8,4,0.55)'
+        ctx.fillRect(ox, oy, TILE_SIZE, TILE_SIZE)
+      } else {
+        // never seen — full fog
+        ctx.fillStyle = 'rgba(5,4,2,0.92)'
+        ctx.fillRect(ox, oy, TILE_SIZE, TILE_SIZE)
+        // subtle noise to break flatness
+        if ((x * 7 + y * 13) % 5 === 0) {
+          ctx.fillStyle = 'rgba(20,15,5,0.5)'
+          ctx.fillRect(ox + (x % 3) * 8, oy + (y % 4) * 7, 3, 3)
+        }
+      }
+    }
+  }
+}
+
+// ---------- Energy indicator (for generator icon / status) ----------
+export function drawEnergyIcon(ctx: CanvasRenderingContext2D, x: number, y: number, size = 12, color = '#ffe060') {
+  ctx.save()
+  ctx.translate(x, y)
+  ctx.fillStyle = color
+  // lightning bolt
+  ctx.beginPath()
+  ctx.moveTo(size * 0.55, 0)
+  ctx.lineTo(size * 0.15, size * 0.55)
+  ctx.lineTo(size * 0.45, size * 0.55)
+  ctx.lineTo(size * 0.35, size)
+  ctx.lineTo(size * 0.85, size * 0.4)
+  ctx.lineTo(size * 0.55, size * 0.4)
+  ctx.closePath()
+  ctx.fill()
+  ctx.restore()
 }

@@ -11,12 +11,14 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Brush, Eraser, PaintBucket, Square, Grid3x3, Save, FolderOpen,
   Download, Upload, Trash2, Undo2, Redo2, Hand, Map as MapIcon, Sparkles,
-  Play, Pause, Home, Hammer, Sword, Coins, Skull, Trophy, Eye,
+  Play, Pause, Home, Hammer, Sword, Coins, Skull, Trophy, Eye, Zap,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   TERRAIN, TILE_SIZE, drawTerrain, drawTerrainLayer, drawBuilding, drawUnit, drawWorm,
   drawHealthBar, drawSelectionRing, drawMoveMarker,
+  drawProjectile, drawExplosion, drawMuzzleFlash,
+  drawRangeIndicator, drawFogOfWar, drawEnergyIcon,
   getTilePreview, getBuildingPreview, getUnitPreview,
   clearTerrainCache,
   FACTION_COLORS, type Faction, type BuildingType, type UnitType,
@@ -25,7 +27,7 @@ import {
   createGame, tick, CONFIG, BUILD_COSTS, type GameState, type Unit, type Building,
   canBuild, placeBuilding, queueUnit, commandMove, commandAttack,
   idx, isWalkable, isBuildable, buildingAt, dist, inBounds,
-  pickUnitAt, pickBuildingAt,
+  pickUnitAt, pickBuildingAt, hasPower,
   typeRu, unitName, bldName, factionRu,
 } from '@/lib/game-engine'
 
@@ -563,20 +565,40 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
             ctx.fillStyle = 'rgba(255,150,80,0.6)'; ctx.fillRect(u.x*TILE_SIZE-8, u.y*TILE_SIZE-TILE_SIZE/2+6, 16*(u.cargo/u.maxCargo), 1)
           }
         }
-        // worms (with subtle wiggle)
+        // worms (with subtle wiggle + HP bar if damaged)
         for (const w of s.worms) {
           const angle = Math.atan2(w.y - w.ty, w.x - w.tx) + Math.sin(tNow * 3 + w.id) * 0.15
           drawWorm(ctx, w.x*TILE_SIZE, w.y*TILE_SIZE, angle)
+          if (w.hp < w.maxHp) drawHealthBar(ctx, w.x*TILE_SIZE, w.y*TILE_SIZE-TILE_SIZE/2-2, TILE_SIZE-4, w.hp/w.maxHp)
         }
-        // selection highlight
+        // projectiles
+        for (const p of s.projectiles) {
+          drawProjectile(ctx, p.x*TILE_SIZE, p.y*TILE_SIZE, p.sx*TILE_SIZE, p.sy*TILE_SIZE, p.color)
+        }
+        // muzzle flashes
+        for (const f of s.flashes) {
+          drawMuzzleFlash(ctx, f.x*TILE_SIZE, f.y*TILE_SIZE, f.frame)
+        }
+        // explosions
+        for (const e of s.explosions) {
+          drawExplosion(ctx, e.x*TILE_SIZE, e.y*TILE_SIZE, e.frame, e.maxFrame, e.size, e.color)
+        }
+        // fog of war (drawn BEFORE selection/effects so they stay visible)
+        drawFogOfWar(ctx, s.explored, s.visible, s.width, s.height)
+        // selection highlight + range indicator (drawn on top of fog)
         if (sel?.type === 'unit') {
           const u = s.units.find(u=>u.id===sel.id)
-          if (u) drawSelectionRing(ctx, u.x*TILE_SIZE, u.y*TILE_SIZE, '#4ade80')
+          if (u) {
+            drawSelectionRing(ctx, u.x*TILE_SIZE, u.y*TILE_SIZE, '#4ade80')
+            const cfg = CONFIG[u.type] as any
+            if (cfg.range > 0) drawRangeIndicator(ctx, u.x*TILE_SIZE, u.y*TILE_SIZE, cfg.range)
+          }
         } else if (sel?.type === 'building') {
           const b = s.buildings.find(b=>b.id===sel.id)
           if (b) {
             ctx.strokeStyle = '#4ade80'; ctx.lineWidth = 2
             ctx.strokeRect(b.x*TILE_SIZE, b.y*TILE_SIZE, TILE_SIZE, TILE_SIZE)
+            if (b.type === 'turret') drawRangeIndicator(ctx, b.x*TILE_SIZE+TILE_SIZE/2, b.y*TILE_SIZE+TILE_SIZE/2, CONFIG.turret.range)
           }
         }
       }
@@ -699,9 +721,10 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
     if (!sel || sel.type !== 'building') return
     const b = s.buildings.find(b=>b.id===sel.id); if (!b) return
     const prodMap: Record<BuildingType, UnitType[]> = {
-      palace:['harvester'], barracks:['soldier'], factory:['tank'], turret:[], refinery:[]
+      palace:['harvester'], barracks:['soldier'], factory:['tank'], turret:[], refinery:[], generator:[]
     }
     if (!prodMap[b.type].includes(type)) return
+    if (!hasPower(s, 'atreides')) { toast.error('Недостаточно энергии! Постройте генератор'); return }
     if (queueUnit(s, b, type)) toast.success(`В производство: ${unitName(type)}`)
     else toast.error('Недостаточно средств или здание не достроено')
     forceRender(n=>n+1)
@@ -723,6 +746,11 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
         <Separator orientation="vertical" className="h-6 bg-neutral-700" />
         <div className="flex items-center gap-1.5 text-amber-400 font-bold">
           <Coins className="w-4 h-4" /> <span className="font-mono">{Math.floor(s.players.atreides.credits)}</span>
+        </div>
+        {/* Energy indicator */}
+        <div className={`flex items-center gap-1.5 font-bold ${hasPower(s, 'atreides') ? 'text-cyan-400' : 'text-red-400'}`}>
+          <Zap className="w-4 h-4" />
+          <span className="font-mono text-xs">{s.players.atreides.energyMax - s.players.atreides.energyDemand}/{s.players.atreides.energyMax}</span>
         </div>
         <Badge variant="outline" className="border-amber-700/50 text-amber-500">Атрейдес</Badge>
         <div className="flex items-center gap-3 text-xs text-neutral-400">
@@ -847,6 +875,15 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
                     {selBld.queue.length > 0 && (
                       <div className="text-xs text-neutral-400">В очереди: {selBld.queue.length}</div>
                     )}
+                    {selBld.type === 'generator' && (
+                      <div className="text-xs text-cyan-400 flex items-center gap-1"><Zap className="w-3 h-3"/> Производит: +{CONFIG.generator.energyOutput} энергии</div>
+                    )}
+                    {selBld.type === 'turret' && (
+                      <div className="text-xs text-neutral-400">Радиус атаки: {CONFIG.turret.range} · Урон: {CONFIG.turret.dmg}</div>
+                    )}
+                    {'energy' in CONFIG[selBld.type] && (CONFIG[selBld.type] as any).energy > 0 && (
+                      <div className="text-xs text-amber-500 flex items-center gap-1"><Zap className="w-3 h-3"/> Расход: {(CONFIG[selBld.type] as any).energy} энергии</div>
+                    )}
                   </div>
                 ) : (
                   <div className="p-3 rounded-lg bg-neutral-800/40 text-xs text-neutral-500 text-center">Ничего не выбрано</div>
@@ -860,8 +897,9 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
                 <h3 className="text-xs font-semibold uppercase text-neutral-400 mb-2">Строительство</h3>
                 <div className="space-y-1.5">
                   {([
-                    ['barracks', CONFIG.barracks.cost], ['factory', CONFIG.factory.cost],
-                    ['turret', CONFIG.turret.cost], ['refinery', CONFIG.refinery.cost],
+                    ['generator', CONFIG.generator.cost], ['barracks', CONFIG.barracks.cost],
+                    ['factory', CONFIG.factory.cost], ['turret', CONFIG.turret.cost],
+                    ['refinery', CONFIG.refinery.cost],
                   ] as [BuildingType, number][]).map(([t, cost]) => {
                     const can = s.players.atreides.credits >= cost
                     return (
