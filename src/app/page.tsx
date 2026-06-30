@@ -24,8 +24,9 @@ import {
   FACTION_COLORS, type Faction, type BuildingType, type UnitType,
 } from '@/lib/tile-renderer'
 import {
-  createGame, tick, CONFIG, BUILD_COSTS, type GameState, type Unit, type Building,
+  createGame, tick, CONFIG, BUILD_COSTS, FOOTPRINT, RESEARCH, type GameState, type Unit, type Building,
   canBuild, placeBuilding, queueUnit, commandMove, commandAttack,
+  cancelQueueItem, startResearch, cancelResearch, getUpgrade,
   idx, isWalkable, isBuildable, buildingAt, dist, inBounds,
   pickUnitAt, pickBuildingAt, hasPower,
   typeRu, unitName, bldName, factionRu,
@@ -86,14 +87,14 @@ function generateDefaultMap(w: number, h: number): number[] {
       if (dx*dx + dy*dy <= r*r) g[y*w+x] = 7
     }
   }
-  // spice fields (on sand/dunes) — more, bigger, brighter
-  for (let i = 0; i < 9; i++) {
+  // spice fields — ONLY on sand (tile 1), fewer but larger patches, clearly distinct
+  for (let i = 0; i < 5; i++) {
     const cx = Math.floor(rng() * w), cy = Math.floor(rng() * h), r = 2 + Math.floor(rng() * 2)
     for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
       const x = cx + dx, y = cy + dy
       if (x < 0 || y < 0 || x >= w || y >= h) continue
       const idx = y*w+x
-      if ((g[idx] === 1 || g[idx] === 2) && rng() > 0.25) g[idx] = rng() > 0.4 ? 5 : 6
+      if (g[idx] === 1 && rng() > 0.3) g[idx] = rng() > 0.45 ? 5 : 6
     }
   }
   // clear corners for bases (atreides bottom-left, harkonnen top-right)
@@ -128,9 +129,9 @@ export default function EditorPage() {
   const [difficulty, setDifficulty] = useState<'easy'|'medium'|'hard'>('medium')
 
   // editor state
-  const [gridW, setGridW] = useState(24)
-  const [gridH, setGridH] = useState(24)
-  const [grid, setGrid] = useState<number[]>(() => generateDefaultMap(24, 24))
+  const [gridW, setGridW] = useState(32)
+  const [gridH, setGridH] = useState(32)
+  const [grid, setGrid] = useState<number[]>(() => generateDefaultMap(32, 32))
   const [terrainVer, setTerrainVer] = useState(0)  // bump to invalidate terrain cache
   // invalidate terrain cache whenever grid changes
   useEffect(() => { clearTerrainCache(); setTerrainVer(v => v + 1) }, [grid, gridW, gridH])
@@ -270,16 +271,15 @@ export default function EditorPage() {
   }
 
   const startGame = () => {
-    // ensure map has some spice & rock
+    // ensure map has some spice (only on sand)
     let hasSpice = grid.some(t => t === 5 || t === 6)
     if (!hasSpice) {
-      // add spice patches
       const g = [...grid]
-      for (let i = 0; i < 8; i++) {
+      for (let i = 0; i < 5; i++) {
         const x = Math.floor(Math.random()*gridW), y = Math.floor(Math.random()*gridH)
-        for (let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) {
+        for (let dy=-2;dy<=2;dy++) for(let dx=-2;dx<=2;dx++) {
           const nx=x+dx, ny=y+dy
-          if (inBounds(nx,ny,gridW,gridH) && (g[idx(nx,ny,gridW)]===1||g[idx(nx,ny,gridW)]===2)) g[idx(nx,ny,gridW)] = Math.random()>0.5?5:6
+          if (inBounds(nx,ny,gridW,gridH) && g[idx(nx,ny,gridW)]===1 && Math.random()>0.4) g[idx(nx,ny,gridW)] = Math.random()>0.5?5:6
         }
       }
       setGrid(g)
@@ -530,19 +530,21 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
         drawTerrainLayer(ctx, s.terrain, s.width, s.height, tNow, s.terrainVersion)
         // build preview
         if (buildModeRef.current && hoverCellRef.current) {
-          const ok = canBuild(s, 'atreides', buildModeRef.current, hoverCellRef.current.x, hoverCellRef.current.y)
+          const bm = buildModeRef.current
+          const fp = FOOTPRINT[bm]
+          const ok = canBuild(s, 'atreides', bm, hoverCellRef.current.x, hoverCellRef.current.y)
           ctx.fillStyle = ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'
-          ctx.fillRect(hoverCellRef.current.x*TILE_SIZE, hoverCellRef.current.y*TILE_SIZE, TILE_SIZE, TILE_SIZE)
+          ctx.fillRect(hoverCellRef.current.x*TILE_SIZE, hoverCellRef.current.y*TILE_SIZE, fp.w*TILE_SIZE, fp.h*TILE_SIZE)
         }
         // buildings
         for (const b of s.buildings) {
-          drawBuilding(ctx, b.type, b.owner, b.x*TILE_SIZE, b.y*TILE_SIZE)
-          if (b.hp < b.maxHp) drawHealthBar(ctx, b.x*TILE_SIZE+TILE_SIZE/2, b.y*TILE_SIZE-2, TILE_SIZE-4, b.hp/b.maxHp)
+          drawBuilding(ctx, b.type, b.owner, b.x*TILE_SIZE, b.y*TILE_SIZE, b.w, b.h)
+          if (b.hp < b.maxHp) drawHealthBar(ctx, b.x*TILE_SIZE+b.w*TILE_SIZE/2, b.y*TILE_SIZE-2, b.w*TILE_SIZE-4, b.hp/b.maxHp)
           // production indicator
           if (b.queue.length > 0) {
             const q = b.queue[0]
-            ctx.fillStyle = '#000'; ctx.fillRect(b.x*TILE_SIZE+2, b.y*TILE_SIZE+TILE_SIZE-6, TILE_SIZE-4, 4)
-            ctx.fillStyle = '#22c55e'; ctx.fillRect(b.x*TILE_SIZE+2, b.y*TILE_SIZE+TILE_SIZE-6, (TILE_SIZE-4)*(q.progress/CONFIG[q.type].buildTime), 4)
+            ctx.fillStyle = '#000'; ctx.fillRect(b.x*TILE_SIZE+2, b.y*TILE_SIZE+b.h*TILE_SIZE-6, b.w*TILE_SIZE-4, 4)
+            ctx.fillStyle = '#22c55e'; ctx.fillRect(b.x*TILE_SIZE+2, b.y*TILE_SIZE+b.h*TILE_SIZE-6, (b.w*TILE_SIZE-4)*(q.progress/CONFIG[q.type].buildTime), 4)
           }
         }
         // move markers for selected
@@ -597,8 +599,11 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
           const b = s.buildings.find(b=>b.id===sel.id)
           if (b) {
             ctx.strokeStyle = '#4ade80'; ctx.lineWidth = 2
-            ctx.strokeRect(b.x*TILE_SIZE, b.y*TILE_SIZE, TILE_SIZE, TILE_SIZE)
-            if (b.type === 'turret') drawRangeIndicator(ctx, b.x*TILE_SIZE+TILE_SIZE/2, b.y*TILE_SIZE+TILE_SIZE/2, CONFIG.turret.range)
+            ctx.strokeRect(b.x*TILE_SIZE, b.y*TILE_SIZE, b.w*TILE_SIZE, b.h*TILE_SIZE)
+            if (b.type === 'turret') {
+              const tRange = CONFIG.turret.range * getUpgrade(s, 'atreides', 'turretRange')
+              drawRangeIndicator(ctx, b.x*TILE_SIZE+b.w*TILE_SIZE/2, b.y*TILE_SIZE+b.h*TILE_SIZE/2, tRange)
+            }
           }
         }
       }
@@ -848,7 +853,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
                   <div className="p-3 rounded-lg bg-neutral-800/60 space-y-2">
                     <div className="flex items-center gap-2">
                       <div className="w-10 h-10 ring-1 ring-neutral-600 rounded overflow-hidden">
-                        <img src={getBuildingPreview(selBld.type, 'atreides', 48)} alt="" className="w-full h-full"/>
+                        <img src={getBuildingPreview(selBld.type, 'atreides', 48, selBld.w, selBld.h)} alt="" className="w-full h-full"/>
                       </div>
                       <div>
                         <div className="text-sm font-medium">{typeRu(selBld.type)}</div>
@@ -873,13 +878,59 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
                       </Button>
                     )}
                     {selBld.queue.length > 0 && (
-                      <div className="text-xs text-neutral-400">В очереди: {selBld.queue.length}</div>
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-neutral-500 uppercase">Очередь (клик — отмена):</div>
+                        {selBld.queue.map((q, i) => (
+                          <button key={i} onClick={() => { cancelQueueItem(s, selBld, i); forceRender(n=>n+1); toast.success(`Отменено: ${unitName(q.type)} (+${Math.floor(q.cost*0.75)}$)`) }}
+                            className="w-full flex items-center gap-1.5 p-1 rounded bg-neutral-700/60 hover:bg-red-900/60 text-left transition-colors group">
+                            <img src={getUnitPreview(q.type, 'atreides', 20)} alt="" className="w-5 h-5"/>
+                            <div className="flex-1">
+                              <div className="text-[11px] text-neutral-200">{unitName(q.type)}</div>
+                              <div className="h-1 bg-neutral-900 rounded overflow-hidden">
+                                {i === 0 && <div className="h-full bg-amber-500" style={{width: `${(q.progress/CONFIG[q.type].buildTime)*100}%`}}/>}
+                              </div>
+                            </div>
+                            <span className="text-[10px] text-neutral-500 group-hover:text-red-400">✕</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {/* Research options */}
+                    {RESEARCH.filter(r => r.building === selBld.type).length > 0 && selBld.hp >= selBld.maxHp * 0.5 && (
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-cyan-400 uppercase">Исследования:</div>
+                        {selBld.research ? (
+                          <div className="p-1.5 rounded bg-cyan-900/30">
+                            <div className="text-[11px] text-cyan-300">{RESEARCH.find(r => r.id === selBld.research!.type)?.name}</div>
+                            <div className="h-1.5 bg-neutral-900 rounded overflow-hidden mt-1">
+                              <div className="h-full bg-cyan-500" style={{width: `${(selBld.research.progress/selBld.research.totalTime)*100}%`}}/>
+                            </div>
+                            <button onClick={() => { cancelResearch(s, selBld); forceRender(n=>n+1); toast.success('Исследование отменено') }}
+                              className="text-[10px] text-red-400 hover:text-red-300 mt-0.5">Отменить</button>
+                          </div>
+                        ) : (
+                          RESEARCH.filter(r => r.building === selBld.type).map(r => (
+                            <button key={r.id} onClick={() => {
+                              if (startResearch(s, selBld, r.id)) { forceRender(n=>n+1); toast.success(`Исследование: ${r.name}`) }
+                              else toast.error('Недостаточно средств или энергии')
+                            }}
+                              disabled={s.players.atreides.credits < r.cost}
+                              className={`w-full text-left p-1.5 rounded text-[11px] transition-colors ${s.players.atreides.credits >= r.cost ? 'bg-neutral-700/60 hover:bg-cyan-900/40' : 'bg-neutral-900 opacity-40'}`}>
+                              <div className="flex justify-between">
+                                <span className="text-neutral-200">{r.name}</span>
+                                <span className="text-cyan-400 font-mono">{r.cost}$</span>
+                              </div>
+                              <div className="text-[9px] text-neutral-500">{r.desc}</div>
+                            </button>
+                          ))
+                        )}
+                      </div>
                     )}
                     {selBld.type === 'generator' && (
                       <div className="text-xs text-cyan-400 flex items-center gap-1"><Zap className="w-3 h-3"/> Производит: +{CONFIG.generator.energyOutput} энергии</div>
                     )}
                     {selBld.type === 'turret' && (
-                      <div className="text-xs text-neutral-400">Радиус атаки: {CONFIG.turret.range} · Урон: {CONFIG.turret.dmg}</div>
+                      <div className="text-xs text-neutral-400">Радиус: {(CONFIG.turret.range * getUpgrade(s, 'atreides', 'turretRange')).toFixed(1)} · Урон: {(CONFIG.turret.dmg * getUpgrade(s, 'atreides', 'turretDmg')).toFixed(0)}</div>
                     )}
                     {'energy' in CONFIG[selBld.type] && (CONFIG[selBld.type] as any).energy > 0 && (
                       <div className="text-xs text-amber-500 flex items-center gap-1"><Zap className="w-3 h-3"/> Расход: {(CONFIG[selBld.type] as any).energy} энергии</div>
@@ -906,7 +957,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
                       <button key={t} onClick={()=>handleBuild(t)} disabled={!can}
                         className={`w-full flex items-center gap-2 p-2 rounded-lg transition-all ${can?'bg-neutral-800 hover:bg-neutral-700':'bg-neutral-900 opacity-40'}`}>
                         <div className="w-8 h-8 ring-1 ring-neutral-600 rounded overflow-hidden">
-                          <img src={getBuildingPreview(t, 'atreides', 40)} alt="" className="w-full h-full"/>
+                          <img src={getBuildingPreview(t, 'atreides', 40, FOOTPRINT[t].w, FOOTPRINT[t].h)} alt="" className="w-full h-full"/>
                         </div>
                         <div className="flex-1 text-left">
                           <div className="text-sm">{typeRu(t)}</div>

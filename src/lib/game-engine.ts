@@ -6,13 +6,32 @@ import { Faction, BuildingType, UnitType } from './tile-renderer'
 export interface Building {
   id: number
   type: BuildingType
-  x: number
+  x: number       // top-left tile
   y: number
+  w: number       // footprint width (tiles)
+  h: number       // footprint height (tiles)
   owner: Faction
   hp: number
   maxHp: number
   cooldown: number
   queue: { type: UnitType; progress: number; cost: number }[]
+  research?: ResearchState
+}
+
+export interface ResearchState {
+  type: string
+  progress: number
+  totalTime: number
+}
+
+export interface ResearchDef {
+  id: string
+  name: string
+  cost: number
+  time: number
+  building: BuildingType
+  desc: string
+  apply: (s: GameState, owner: Faction) => void
 }
 
 export interface Unit {
@@ -125,20 +144,82 @@ export const CONFIG = {
   harvester: { cost: 150, hp: 200, speed: 0.08, maxCargo: 60, buildTime: 120, dmg: 0, range: 0, atkCd: 0, energy: 2 },
   soldier:   { cost: 60,  hp: 70,  speed: 0.12,  maxCargo: 0,  buildTime: 60,  dmg: 9,  range: 1.8, atkCd: 28, energy: 1 },
   tank:      { cost: 200, hp: 160, speed: 0.09,  maxCargo: 0,  buildTime: 100, dmg: 22, range: 2.8, atkCd: 40, energy: 3 },
-  barracks:  { cost: 150, hp: 400, buildTime: 200, energy: 3 },
-  factory:   { cost: 300, hp: 550, buildTime: 300, energy: 5 },
-  turret:    { cost: 100, hp: 280, buildTime: 120, dmg: 16, range: 4.5, atkCd: 32, energy: 2 },
-  refinery:  { cost: 200, hp: 450, buildTime: 180, energy: 2 },
-  generator: { cost: 120, hp: 300, buildTime: 100, energyOutput: 12 },
-  palace:    { cost: 0,   hp: 1500, buildTime: 0, energy: 0 },
+  barracks:  { cost: 150, hp: 400, buildTime: 200, energy: 3, w: 2, h: 2 },
+  factory:   { cost: 300, hp: 550, buildTime: 300, energy: 5, w: 3, h: 2 },
+  turret:    { cost: 100, hp: 280, buildTime: 120, dmg: 16, range: 4.5, atkCd: 32, energy: 2, w: 1, h: 1 },
+  refinery:  { cost: 200, hp: 450, buildTime: 180, energy: 2, w: 2, h: 2 },
+  generator: { cost: 120, hp: 300, buildTime: 100, energy: 0, energyOutput: 12, w: 2, h: 2 },
+  palace:    { cost: 0,   hp: 1500, buildTime: 0, energy: 0, w: 2, h: 2 },
   spiceValue: { 5: 1, 6: 2 },
   wormInterval: 2200,
   wormLife: 700,
   wormHp: 120,
-  wormDmg: 60,        // damage to worm per hit
+  wormDmg: 60,
   wormSpeed: 0.025,
-  wormRange: 5,       // aggro range
-  startingCredits: 600,
+  wormRange: 5,
+  startingCredits: 800,
+}
+
+// Building footprints (tiles)
+export const FOOTPRINT: Record<string, { w: number; h: number }> = {
+  palace:    { w: 2, h: 2 },
+  barracks:  { w: 2, h: 2 },
+  factory:   { w: 3, h: 2 },
+  turret:    { w: 1, h: 1 },
+  refinery:  { w: 2, h: 2 },
+  generator: { w: 2, h: 2 },
+}
+
+// ---------- Research definitions ----------
+export const RESEARCH: ResearchDef[] = [
+  {
+    id: 'turret_dmg', name: 'Усиление турелей +50% урон', cost: 200, time: 150, building: 'turret',
+    desc: 'Увеличивает урон всех турелей на 50%',
+    apply: (s, owner) => { (s as any)._upgrades = (s as any)._upgrades || {}; (s as any)._upgrades[owner] = (s as any)._upgrades[owner] || {}; (s as any)._upgrades[owner].turretDmg = 1.5; logEvent(s, 'build', 'Исследование: турели усилены') },
+  },
+  {
+    id: 'turret_range', name: 'Дальнобойность турелей +30%', cost: 250, time: 180, building: 'turret',
+    desc: 'Увеличивает радиус атаки турелей на 30%',
+    apply: (s, owner) => { (s as any)._upgrades = (s as any)._upgrades || {}; (s as any)._upgrades[owner] = (s as any)._upgrades[owner] || {}; (s as any)._upgrades[owner].turretRange = 1.3; logEvent(s, 'build', 'Исследование: турели дальнобойнее') },
+  },
+  {
+    id: 'unit_speed', name: 'Скорость юнитов +40%', cost: 220, time: 160, building: 'barracks',
+    desc: 'Увеличивает скорость передвижения всех юнитов на 40%',
+    apply: (s, owner) => { (s as any)._upgrades = (s as any)._upgrades || {}; (s as any)._upgrades[owner] = (s as any)._upgrades[owner] || {}; (s as any)._upgrades[owner].unitSpeed = 1.4; logEvent(s, 'build', 'Исследование: юниты быстрее') },
+  },
+  {
+    id: 'unit_hp', name: 'Прочность юнитов +30%', cost: 200, time: 150, building: 'barracks',
+    desc: 'Увеличивает HP всех юнитов на 30%',
+    apply: (s, owner) => { (s as any)._upgrades = (s as any)._upgrades || {}; (s as any)._upgrades[owner] = (s as any)._upgrades[owner] || {}; (s as any)._upgrades[owner].unitHp = 1.3; logEvent(s, 'build', 'Исследование: юниты прочнее') },
+  },
+  {
+    id: 'tank_dmg', name: 'Усиление танков +50% урон', cost: 280, time: 200, building: 'factory',
+    desc: 'Увеличивает урон танков на 50%',
+    apply: (s, owner) => { (s as any)._upgrades = (s as any)._upgrades || {}; (s as any)._upgrades[owner] = (s as any)._upgrades[owner] || {}; (s as any)._upgrades[owner].tankDmg = 1.5; logEvent(s, 'build', 'Исследование: танки усилены') },
+  },
+]
+
+export function getUpgrade(s: GameState, owner: Faction, key: string): number {
+  return ((s as any)._upgrades?.[owner]?.[key]) || 1
+}
+
+export function startResearch(s: GameState, bld: Building, researchId: string): boolean {
+  const def = RESEARCH.find(r => r.id === researchId)
+  if (!def || bld.type !== def.building) return false
+  if (bld.research) return false
+  if (s.players[bld.owner].credits < def.cost) return false
+  if (!hasPower(s, bld.owner)) return false
+  s.players[bld.owner].credits -= def.cost
+  bld.research = { type: researchId, progress: 0, totalTime: def.time }
+  return true
+}
+
+export function cancelResearch(s: GameState, bld: Building): boolean {
+  if (!bld.research) return false
+  const def = RESEARCH.find(r => r.id === bld.research!.type)
+  if (def) s.players[bld.owner].credits += Math.floor(def.cost * 0.5)
+  bld.research = undefined
+  return true
 }
 
 export const BUILD_COSTS: Record<string, number> = {
@@ -174,7 +255,13 @@ export function isBuildable(terrain: number[], x: number, y: number, w: number, 
 }
 
 export function buildingAt(s: GameState, x: number, y: number): Building | null {
-  return s.buildings.find(b => b.x === x && b.y === y) || null
+  // check if tile (x,y) is within any building's footprint
+  return s.buildings.find(b => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h) || null
+}
+
+// check if a tile is occupied by a building footprint
+export function tileHasBuilding(s: GameState, x: number, y: number): boolean {
+  return s.buildings.some(b => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h)
 }
 
 // check if a tile is occupied by a unit (1 unit per tile)
@@ -202,14 +289,18 @@ export function createGame(width: number, height: number, terrain: number[], dif
   if (difficulty === 'medium') s.players.harkonnen.credits += 200
   if (difficulty === 'hard') { s.players.harkonnen.credits += 500 }
 
-  // place palaces + starting generators at opposite corners
-  const px1 = 3, py1 = Math.floor(height / 2)
-  const px2 = width - 4, py2 = Math.floor(height / 2)
+  // place palaces at opposite corners (2x2 footprint)
+  const px1 = 3, py1 = Math.floor(height / 2) - 1
+  const px2 = width - 5, py2 = Math.floor(height / 2) - 1
   for (const [bx, by, fac] of [[px1, py1, 'atreides'], [px2, py2, 'harkonnen']] as const) {
-    if (inBounds(bx, by, width, height)) terrain[idx(bx, by, width)] = 3
-    s.buildings.push({ id: s.nextId++, type: 'palace', x: bx, y: by, owner: fac, hp: CONFIG.palace.hp, maxHp: CONFIG.palace.hp, cooldown: 0, queue: [] })
-    // start harvester
-    s.units.push(makeUnit(s, 'harvester', fac, bx, by + 1.5))
+    const fp = FOOTPRINT.palace
+    // clear footprint to rock platform
+    for (let dy = 0; dy < fp.h; dy++) for (let dx = 0; dx < fp.w; dx++) {
+      if (inBounds(bx + dx, by + dy, width, height)) terrain[idx(bx + dx, by + dy, width)] = 3
+    }
+    s.buildings.push({ id: s.nextId++, type: 'palace', x: bx, y: by, w: fp.w, h: fp.h, owner: fac, hp: CONFIG.palace.hp, maxHp: CONFIG.palace.hp, cooldown: 0, queue: [] })
+    // start harvester below palace
+    s.units.push(makeUnit(s, 'harvester', fac, bx + fp.w / 2, by + fp.h + 0.5))
   }
   recomputeEnergy(s)
   return s
@@ -278,22 +369,32 @@ function spawnExplosion(s: GameState, x: number, y: number, size = 1, color = '#
 
 // ---------- Building actions ----------
 export function canBuild(s: GameState, owner: Faction, type: BuildingType, x: number, y: number): boolean {
-  if (!isBuildable(s.terrain, x, y, s.width, s.height)) return false
-  if (buildingAt(s, x, y)) return false
+  const fp = FOOTPRINT[type]
+  if (!fp) return false
+  // check all footprint tiles are buildable and free
+  for (let dy = 0; dy < fp.h; dy++) {
+    for (let dx = 0; dx < fp.w; dx++) {
+      const tx = x + dx, ty = y + dy
+      if (!isBuildable(s.terrain, tx, ty, s.width, s.height)) return false
+      if (tileHasBuilding(s, tx, ty)) return false
+    }
+  }
   const cost = BUILD_COSTS[type] ?? 0
   if (s.players[owner].credits < cost) return false
-  // must be near an existing friendly building
-  const near = s.buildings.some(b => b.owner === owner && dist(b.x, b.y, x, y) < 4)
+  // must be near an existing friendly building (check from footprint center)
+  const cx = x + fp.w / 2, cy = y + fp.h / 2
+  const near = s.buildings.some(b => b.owner === owner && dist(b.x + b.w / 2, b.y + b.h / 2, cx, cy) < 5)
   return near
 }
 
 export function placeBuilding(s: GameState, owner: Faction, type: BuildingType, x: number, y: number): boolean {
   if (!canBuild(s, owner, type, x, y)) return false
+  const fp = FOOTPRINT[type]
   const cost = BUILD_COSTS[type] ?? 0
   s.players[owner].credits -= cost
   const cfg = CONFIG[type] as any
   s.buildings.push({
-    id: s.nextId++, type, x, y, owner,
+    id: s.nextId++, type, x, y, w: fp.w, h: fp.h, owner,
     hp: cfg.hp * 0.5, maxHp: cfg.hp,
     cooldown: 0, queue: [],
   })
@@ -353,7 +454,17 @@ export function pickUnitAt(s: GameState, x: number, y: number, owner?: Faction, 
 }
 
 export function pickBuildingAt(s: GameState, x: number, y: number, owner?: Faction): Building | null {
-  return s.buildings.find(b => b.x === Math.floor(x) && b.y === Math.floor(y) && (!owner || b.owner === owner)) || null
+  const ix = Math.floor(x), iy = Math.floor(y)
+  return s.buildings.find(b => ix >= b.x && ix < b.x + b.w && iy >= b.y && iy < b.y + b.h && (!owner || b.owner === owner)) || null
+}
+
+// cancel a queued unit (refund partial)
+export function cancelQueueItem(s: GameState, bld: Building, index: number): boolean {
+  if (index < 0 || index >= bld.queue.length) return false
+  const item = bld.queue[index]
+  s.players[bld.owner].credits += Math.floor(item.cost * 0.75)
+  bld.queue.splice(index, 1)
+  return true
 }
 
 // ---------- Core tick ----------
@@ -383,6 +494,15 @@ export function tick(s: GameState) {
 function updateBuildings(s: GameState) {
   for (const b of s.buildings) {
     if (b.hp < b.maxHp) b.hp = Math.min(b.maxHp, b.hp + 2)
+    // research processing
+    if (b.research) {
+      b.research.progress++
+      if (b.research.progress >= b.research.totalTime) {
+        const def = RESEARCH.find(r => r.id === b.research!.type)
+        if (def) def.apply(s, b.owner)
+        b.research = undefined
+      }
+    }
     if (b.queue.length > 0 && b.hp >= b.maxHp * 0.5) {
       const q = b.queue[0]
       q.progress++
@@ -399,17 +519,19 @@ function updateBuildings(s: GameState) {
         }
       }
     }
-    // turret auto-attack (only if has power)
+    // turret auto-attack (only if has power) — use building center
     if (b.type === 'turret' && b.hp >= b.maxHp * 0.5 && hasPower(s, b.owner)) {
+      const cx = b.x + b.w / 2, cy = b.y + b.h / 2
+      const tRange = CONFIG.turret.range * getUpgrade(s, b.owner, 'turretRange')
+      const tDmg = CONFIG.turret.dmg * getUpgrade(s, b.owner, 'turretDmg')
       b.cooldown = Math.max(0, b.cooldown - 1)
       if (b.cooldown === 0) {
-        const target = findNearestEnemy(s, b.x + 0.5, b.y + 0.5, b.owner, CONFIG.turret.range)
+        const target = findNearestEnemy(s, cx, cy, b.owner, tRange)
         if (target) {
-          // spawn projectile toward target
-          const tx = 'type' in target ? (target as any).x : (target as Building).x + 0.5
-          const ty = 'type' in target ? (target as any).y : (target as Building).y + 0.5
-          if ('cargo' in target) spawnProjectile(s, b.x + 0.5, b.y + 0.5, tx, ty, CONFIG.turret.dmg, b.owner, '#ffe060', { unitId: (target as Unit).id })
-          else spawnProjectile(s, b.x + 0.5, b.y + 0.5, tx, ty, CONFIG.turret.dmg, b.owner, '#ffe060', { bldId: (target as Building).id })
+          const tx = 'type' in target ? (target as any).x : (target as Building).x + (target as Building).w / 2
+          const ty = 'type' in target ? (target as any).y : (target as Building).y + (target as Building).h / 2
+          if ('cargo' in target) spawnProjectile(s, cx, cy, tx, ty, tDmg, b.owner, '#ffe060', { unitId: (target as Unit).id })
+          else spawnProjectile(s, cx, cy, tx, ty, tDmg, b.owner, '#ffe060', { bldId: (target as Building).id })
           b.cooldown = CONFIG.turret.atkCd
         }
       }
@@ -419,13 +541,16 @@ function updateBuildings(s: GameState) {
 }
 
 function findSpawnTile(s: GameState, b: Building): { x: number; y: number } | null {
-  for (let r = 1; r <= 4; r++) {
-    for (let dy = -r; dy <= r; dy++) {
-      for (let dx = -r; dx <= r; dx++) {
+  // search around the building footprint
+  const cx = b.x + b.w / 2, cy = b.y + b.h / 2
+  for (let r = 1; r <= 5; r++) {
+    for (let dy = -r; dy <= r + b.h - 1; dy++) {
+      for (let dx = -r; dx <= r + b.w - 1; dx++) {
         const x = b.x + dx, y = b.y + dy
         if (!isWalkable(s.terrain, x, y, s.width, s.height)) continue
-        if (s.buildings.some(bb => bb.x === x && bb.y === y)) continue
+        if (tileHasBuilding(s, x, y)) continue
         if (s.units.some(u => Math.round(u.x) === x && Math.round(u.y) === y)) continue
+        // only spawn on edge of footprint (not inside)
         return { x: x + 0.5, y: y + 0.5 }
       }
     }
@@ -480,7 +605,8 @@ function findNearestFriendlyBuilding(s: GameState, x: number, y: number, owner: 
   for (const b of s.buildings) {
     if (b.owner !== owner) continue
     if (b.type !== 'palace' && b.type !== 'refinery') continue
-    const d = dist(x, y, b.x, b.y)
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2
+    const d = dist(x, y, cx, cy)
     if (d < bestD) { bestD = d; best = b }
   }
   return best
@@ -490,13 +616,18 @@ function updateUnits(s: GameState) {
   for (const u of s.units) {
     if (u.cooldown > 0) u.cooldown--
     const cfg = CONFIG[u.type]
+    // apply upgrades
+    const spdMult = u.type !== 'harvester' ? getUpgrade(s, u.owner, 'unitSpeed') : 1
+    const dmgMult = u.type === 'tank' ? getUpgrade(s, u.owner, 'tankDmg') : 1
+    const speed = cfg.speed * spdMult
+    const dmg = cfg.dmg * dmgMult
 
     // harvester AI
     if (u.type === 'harvester') {
       if (u.state === 'idle') {
         if (u.cargo >= u.maxCargo) {
           const b = findNearestFriendlyBuilding(s, u.x, u.y, u.owner)
-          if (b) { u.tx = b.x + 0.5; u.ty = b.y + 0.5; u.state = 'return' }
+          if (b) { u.tx = b.x + b.w/2; u.ty = b.y + b.h/2; u.state = 'return' }
         } else {
           const sp = findNearestSpice(s, u.x, u.y)
           if (sp) { u.tx = sp.x; u.ty = sp.y; u.state = 'harvest' }
@@ -519,12 +650,12 @@ function updateUnits(s: GameState) {
             }
             if (u.cargo >= u.maxCargo) {
               const b = findNearestFriendlyBuilding(s, u.x, u.y, u.owner)
-              if (b) { u.tx = b.x + 0.5; u.ty = b.y + 0.5; u.state = 'return' }
+              if (b) { u.tx = b.x + b.w/2; u.ty = b.y + b.h/2; u.state = 'return' }
               else u.state = 'idle'
             }
           }
         } else {
-          moveToward(s, u, u.tx, u.ty, cfg.speed)
+          moveToward(s, u, u.tx, u.ty, speed)
         }
       } else if (u.state === 'return') {
         const d = dist(u.x, u.y, u.tx, u.ty)
@@ -535,7 +666,7 @@ function updateUnits(s: GameState) {
           u.cargo = 0
           u.state = 'idle'
         } else {
-          moveToward(s, u, u.tx, u.ty, cfg.speed)
+          moveToward(s, u, u.tx, u.ty, speed)
         }
       }
       continue
@@ -543,7 +674,8 @@ function updateUnits(s: GameState) {
 
     // combat units
     if (u.state === 'idle') {
-      const enemy = findNearestEnemy(s, u.x, u.y, u.owner, cfg.range + 2)
+      const autoRange = u.type === 'tank' ? cfg.range * 2.5 : cfg.range * 2
+      const enemy = findNearestEnemy(s, u.x, u.y, u.owner, autoRange)
       if (enemy) {
         // save current position as home to return to after combat
         u.homeX = u.x
@@ -587,18 +719,18 @@ function updateUnits(s: GameState) {
         u.targetBldId = null
         continue
       }
-      const tx = 'type' in target && (target as any).type ? (target as any).x : (target as Building).x + 0.5
-      const ty = 'type' in target && (target as any).type ? (target as any).y : (target as Building).y + 0.5
+      const tx = 'type' in target && (target as any).type ? (target as any).x : (target as Building).x + (target as Building).w / 2
+      const ty = 'type' in target && (target as any).type ? (target as any).y : (target as Building).y + (target as Building).h / 2
       const d = dist(u.x, u.y, tx, ty)
       if (d <= cfg.range) {
         if (u.cooldown <= 0) {
           // fire projectile
-          if ('cargo' in target) spawnProjectile(s, u.x, u.y, (target as Unit).x, (target as Unit).y, cfg.dmg, u.owner, '#ffaa44', { unitId: (target as Unit).id })
-          else spawnProjectile(s, u.x, u.y, (target as Building).x + 0.5, (target as Building).y + 0.5, cfg.dmg, u.owner, '#ffaa44', { bldId: (target as Building).id })
+          if ('cargo' in target) spawnProjectile(s, u.x, u.y, (target as Unit).x, (target as Unit).y, dmg, u.owner, '#ffaa44', { unitId: (target as Unit).id })
+          else spawnProjectile(s, u.x, u.y, tx, ty, dmg, u.owner, '#ffaa44', { bldId: (target as Building).id })
           u.cooldown = cfg.atkCd
         }
       } else {
-        moveToward(s, u, tx, ty, cfg.speed)
+        moveToward(s, u, tx, ty, speed)
       }
     }
 
@@ -606,7 +738,7 @@ function updateUnits(s: GameState) {
       const d = dist(u.x, u.y, u.tx, u.ty)
       if (d < 0.4) u.state = 'idle'
       else {
-        moveToward(s, u, u.tx, u.ty, cfg.speed)
+        moveToward(s, u, u.tx, u.ty, speed)
         // auto-attack only if enemy is right next to us (don't break long moves)
         const enemy = findNearestEnemy(s, u.x, u.y, u.owner, cfg.range * 0.5)
         if (enemy && 'cargo' in enemy) {
@@ -662,17 +794,15 @@ const pathCache = new Map<string, { x: number; y: number } | null>()
 
 function isTileFree(s: GameState, x: number, y: number, exceptUnitId: number): boolean {
   if (!isWalkable(s.terrain, x, y, s.width, s.height)) return false
-  if (s.buildings.some(b => b.x === x && b.y === y)) return false
+  if (tileHasBuilding(s, x, y)) return false
   const other = s.units.find(o => o.id !== exceptUnitId && Math.round(o.x) === x && Math.round(o.y) === y)
   if (other) return false
   return true
 }
 
 function isTilePassable(s: GameState, x: number, y: number, exceptUnitId: number): boolean {
-  // passable = walkable + no building (units can pass through each other's tiles
-  // but will stop on free tiles; we allow temporary overlap during movement)
   if (!isWalkable(s.terrain, x, y, s.width, s.height)) return false
-  if (s.buildings.some(b => b.x === x && b.y === y)) return false
+  if (tileHasBuilding(s, x, y)) return false
   return true
 }
 
@@ -907,7 +1037,14 @@ function updateFog(s: GameState) {
   for (const b of s.buildings) {
     if (b.owner !== 'atreides') continue
     const r = VISION_RANGES[b.type] || 3
-    reveal(s, b.x + 0.5, b.y + 0.5, r)
+    reveal(s, b.x + b.w / 2, b.y + b.h / 2, r)
+    // reveal footprint tiles
+    for (let dy = 0; dy < b.h; dy++) for (let dx = 0; dx < b.w; dx++) {
+      if (inBounds(b.x + dx, b.y + dy, s.width, s.height)) {
+        s.explored[idx(b.x + dx, b.y + dy, s.width)] = true
+        s.visible[idx(b.x + dx, b.y + dy, s.width)] = true
+      }
+    }
   }
 }
 function reveal(s: GameState, x: number, y: number, r: number) {
@@ -982,10 +1119,12 @@ function updateAI(s: GameState) {
 }
 
 function tryAIBuild(s: GameState, owner: Faction, type: BuildingType, near: Building) {
-  for (let r = 1; r <= 4; r++) {
+  // search around the near building's footprint
+  const cx = near.x + near.w / 2, cy = near.y + near.h / 2
+  for (let r = 1; r <= 5; r++) {
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
-        const x = near.x + dx, y = near.y + dy
+        const x = Math.round(cx) + dx, y = Math.round(cy) + dy
         if (canBuild(s, owner, type, x, y)) { placeBuilding(s, owner, type, x, y); return true }
       }
     }
