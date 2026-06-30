@@ -576,828 +576,1074 @@ function renderBuilding(type: BuildingType, faction: Faction, w: number, h: numb
   ctx.ellipse(W / 2, H - 2, W / 2 - 8, 2, 0, 0, Math.PI * 2)
   ctx.fill()
 
+  // ============================================================
+  //  FUTURISTIC / SCI-FI BUILDINGS (Dune 1984/2021 aesthetic)
+  //  Brutalist concrete + metallic panels + glowing energy tech
+  //  Palette: metallic grays primary; faction colors as accents;
+  //           cyan = energy; orange = spice; amber = warning/lights
+  // ============================================================
+
   if (type === 'palace') {
-    // ===== PALACE (2x2 = 80x80): Large fortress — thick walls, 4 corner towers,
-    // central keep, flag, glowing windows, crenellations =====
+    // ===== PALACE (2x2 = 80x80): Brutalist command fortress =====
+    // Wide stepped concrete base + central command tower + comm antenna
+    // + glowing slit windows + energy shield emitters + blast door
 
-    // back wall mass (rises behind the towers and keep)
-    const wallTop = H * 0.34
-    const wallBottom = H - 4
-    rrect(ctx, 6, wallTop, W - 12, wallBottom - wallTop, 3, col.dark)
-    const wallGrad = ctx.createLinearGradient(0, wallTop, 0, wallBottom)
-    wallGrad.addColorStop(0, col.light)
-    wallGrad.addColorStop(0.4, col.primary)
-    wallGrad.addColorStop(1, col.dark)
-    rrect(ctx, 8, wallTop + 2, W - 16, wallBottom - wallTop - 4, 2, wallGrad as any)
-    // wall horizontal trim band
-    px(ctx, 8, wallTop + (wallBottom - wallTop) * 0.55, W - 16, 2, col.dark)
-    px(ctx, 8, wallTop + (wallBottom - wallTop) * 0.55 + 2, W - 16, 1, col.trim)
+    // --- Lower wide base (stepped concrete platform) ---
+    const baseTop = H * 0.46
+    const baseBottom = H - 4
+    rrect(ctx, 2, baseTop, W - 4, baseBottom - baseTop, 2, '#1a1a1a')
+    const baseGrad = ctx.createLinearGradient(0, baseTop, 0, baseBottom)
+    baseGrad.addColorStop(0, '#6a6a6a')
+    baseGrad.addColorStop(0.4, '#4a4a4a')
+    baseGrad.addColorStop(1, '#2a2a2a')
+    rrect(ctx, 3, baseTop + 1, W - 6, baseBottom - baseTop - 2, 2, baseGrad as any)
+    // top edge highlight (sun-baked concrete rim)
+    px(ctx, 3, baseTop + 1, W - 6, 1, '#8a8a8a')
+    // horizontal concrete seam lines
+    px(ctx, 3, baseTop + 10, W - 6, 1, '#1a1a1a')
+    px(ctx, 3, baseTop + 11, W - 6, 1, '#5a5a5a')
+    px(ctx, 3, baseTop + 22, W - 6, 1, '#1a1a1a')
+    px(ctx, 3, baseTop + 23, W - 6, 1, '#5a5a5a')
+    // beveled corner cuts (angular brutalist)
+    px(ctx, 2, baseTop, 3, 1, '#1a1a1a')
+    px(ctx, W - 5, baseTop, 3, 1, '#1a1a1a')
 
-    // crenellations (battlements) along top of back wall
-    const cn = 9
-    const cw = (W - 16) / cn
-    for (let i = 0; i < cn; i++) {
-      if (i % 2 === 0) {
-        const bx = 8 + i * cw
-        rrect(ctx, bx, wallTop - 3, cw - 1, 4, 1, col.dark)
-        px(ctx, bx, wallTop - 3, cw - 1, 1, col.light)
-      }
+    // --- Central command tower (tall, angular, brutalist) ---
+    const tw = W * 0.34
+    const th = H * 0.62
+    const tx = W / 2 - tw / 2
+    const ty = H - th - 3
+    rrect(ctx, tx - 2, ty - 2, tw + 4, th + 2, 1, '#1a1a1a')
+    const towerGrad = ctx.createLinearGradient(tx, 0, tx + tw, 0)
+    towerGrad.addColorStop(0, '#3a3a3a')
+    towerGrad.addColorStop(0.2, '#6a6a6a')
+    towerGrad.addColorStop(0.5, '#7a7a7a')
+    towerGrad.addColorStop(0.8, '#5a5a5a')
+    towerGrad.addColorStop(1, '#2a2a2a')
+    rrect(ctx, tx, ty, tw, th, 1, towerGrad as any)
+    px(ctx, tx, ty, tw, 1, '#9a9a9a')
+
+    // vertical metal panel seams (4 panels)
+    for (let i = 1; i < 4; i++) {
+      const sx = tx + (tw * i / 4)
+      px(ctx, sx, ty + 1, 1, th - 1, '#1a1a1a')
+      px(ctx, sx + 1, ty + 1, 1, th - 1, '#6a6a6a')
+    }
+    // horizontal floor bands (reinforced levels)
+    for (let i = 1; i < 4; i++) {
+      const by = ty + (th * i / 4)
+      px(ctx, tx, by, tw, 1, '#1a1a1a')
+      px(ctx, tx, by + 1, tw, 1, '#6a6a6a')
     }
 
-    // 4 corner towers — front pair (taller, in front) + back pair (slightly behind)
-    const tw = W * 0.18
-    const th = H * 0.7
-    const towerSpecs = [
-      { x: 3, y: H - th - 3, depth: 0 },                       // front-left
-      { x: W - tw - 3, y: H - th - 3, depth: 0 },              // front-right
-      { x: 6, y: H - th - 8, depth: 1 },                       // back-left (smaller, behind)
-      { x: W - tw - 6, y: H - th - 8, depth: 1 },              // back-right
-    ]
-    for (const t of towerSpecs) {
-      const shrink = t.depth === 1 ? 2 : 0
-      const tw2 = tw - shrink * 2
-      // tower body
-      rrect(ctx, t.x + shrink, t.y, tw2, th, 2, col.dark)
-      const tGrad = ctx.createLinearGradient(0, t.y, 0, t.y + th)
-      tGrad.addColorStop(0, col.light)
-      tGrad.addColorStop(0.5, col.primary)
-      tGrad.addColorStop(1, col.dark)
-      rrect(ctx, t.x + shrink + 1, t.y + 1, tw2 - 2, th - 2, 1, tGrad as any)
-      px(ctx, t.x + shrink + 1, t.y + 1, tw2 - 2, 2, col.light)
-      // tower crenellated top
-      const tcn = 3
-      for (let i = 0; i < tcn; i++) {
-        const bx = t.x + shrink + 1 + i * ((tw2 - 2) / tcn)
-        rrect(ctx, bx, t.y - 3, (tw2 - 2) / tcn - 1, 3, 1, col.dark)
-        px(ctx, bx, t.y - 3, (tw2 - 2) / tcn - 1, 1, col.light)
-      }
-      // tower roof (conical)
-      const roofColor = t.depth === 1 ? '#2a1a0a' : '#3a2a1a'
-      ctx.fillStyle = roofColor
+    // glowing cyan horizontal slit windows (3 rows on tower)
+    for (let row = 0; row < 3; row++) {
+      const wy = ty + th * 0.15 + row * (th * 0.22)
+      const ww = tw * 0.28
+      rrect(ctx, tx + 4, wy, ww, 3, 1, '#0080a0')
+      rrect(ctx, tx + 4, wy + 1, ww, 1, 1, '#00d0ff')
+      px(ctx, tx + 4, wy, ww, 1, '#80e8ff')
+      rrect(ctx, tx + tw - ww - 4, wy, ww, 3, 1, '#0080a0')
+      rrect(ctx, tx + tw - ww - 4, wy + 1, ww, 1, 1, '#00d0ff')
+      px(ctx, tx + tw - ww - 4, wy, ww, 1, '#80e8ff')
+    }
+
+    // faction accent stripe (subtle, on tower)
+    px(ctx, tx, ty + th * 0.78, tw, 2, col.primary)
+    px(ctx, tx, ty + th * 0.78 + 2, tw, 1, col.trim)
+
+    // --- Tower top (flat roof pad) ---
+    rrect(ctx, tx - 4, ty - 6, tw + 8, 8, 1, '#1a1a1a')
+    rrect(ctx, tx - 3, ty - 5, tw + 6, 6, 1, '#5a5a5a')
+    px(ctx, tx - 3, ty - 5, tw + 6, 1, '#8a8a8a')
+    // corner comm pads
+    for (const cx2 of [tx - 2, tx + tw - 2]) {
+      rrect(ctx, cx2, ty - 10, 4, 5, 1, '#3a3a3a')
+      px(ctx, cx2, ty - 10, 4, 1, '#6a6a6a')
+    }
+
+    // --- Central comm antenna with glowing tip ---
+    const antX = W / 2
+    const antTopY = H * 0.05
+    px(ctx, antX, antTopY, 1, ty - 4 - antTopY, '#6a6a6a')
+    px(ctx, antX - 3, antTopY + 6, 7, 1, '#5a5a5a')
+    px(ctx, antX - 2, antTopY + 12, 5, 1, '#5a5a5a')
+    const tipGrad = ctx.createRadialGradient(antX, antTopY, 0, antX, antTopY, 6)
+    tipGrad.addColorStop(0, '#c0f4ff')
+    tipGrad.addColorStop(0.3, '#00d0ff')
+    tipGrad.addColorStop(1, 'rgba(0,208,255,0)')
+    ctx.fillStyle = tipGrad
+    ctx.fillRect(antX - 6, antTopY - 6, 12, 12)
+    ctx.fillStyle = '#ffffff'
+    ctx.beginPath(); ctx.arc(antX, antTopY, 1.5, 0, Math.PI * 2); ctx.fill()
+
+    // --- Side comm dishes (smaller antennas on roof pad corners) ---
+    for (const dx of [tx - 3, tx + tw - 2]) {
+      px(ctx, dx + 1, ty - 18, 1, 12, '#5a5a5a')
+      ctx.strokeStyle = '#7a7a7a'; ctx.lineWidth = 1
       ctx.beginPath()
-      ctx.moveTo(t.x + shrink - 1, t.y - 1)
-      ctx.lineTo(t.x + shrink + tw2 / 2, t.y - 11)
-      ctx.lineTo(t.x + shrink + tw2 + 1, t.y - 1)
-      ctx.closePath()
-      ctx.fill()
-      // roof shadow side
-      ctx.fillStyle = '#1a0e04'
-      ctx.beginPath()
-      ctx.moveTo(t.x + shrink + tw2 / 2, t.y - 11)
-      ctx.lineTo(t.x + shrink + tw2 + 1, t.y - 1)
-      ctx.lineTo(t.x + shrink + tw2 / 2 + 1, t.y - 1)
-      ctx.closePath()
-      ctx.fill()
-      // roof finial
-      px(ctx, t.x + shrink + tw2 / 2, t.y - 13, 1, 3, '#5a4a3a')
-      // glowing windows on tower (2 rows)
-      const winY1 = t.y + th * 0.25
-      const winY2 = t.y + th * 0.55
-      for (const wy of [winY1, winY2]) {
-        px(ctx, t.x + shrink + 3, wy, 3, 4, '#ffd060')
-        px(ctx, t.x + shrink + 3, wy, 1, 1, '#fff8c0')
-        px(ctx, t.x + shrink + tw2 - 6, wy, 3, 4, '#ffd060')
-        px(ctx, t.x + shrink + tw2 - 6, wy, 1, 1, '#fff8c0')
+      ctx.moveTo(dx - 1, ty - 16)
+      ctx.lineTo(dx + 3, ty - 18)
+      ctx.stroke()
+      ctx.fillStyle = '#00d0ff'
+      ctx.beginPath(); ctx.arc(dx + 1, ty - 18, 0.8, 0, Math.PI * 2); ctx.fill()
+    }
+
+    // --- Energy shield emitters (glowing corner nodes on base) ---
+    for (const ex of [6, W - 7]) {
+      for (const ey of [baseTop + 4, baseTop + 28]) {
+        const sg = ctx.createRadialGradient(ex, ey, 0, ex, ey, 4)
+        sg.addColorStop(0, '#c0f4ff')
+        sg.addColorStop(0.4, '#00d0ff')
+        sg.addColorStop(1, 'rgba(0,208,255,0)')
+        ctx.fillStyle = sg
+        ctx.fillRect(ex - 4, ey - 4, 8, 8)
+        ctx.fillStyle = '#3a3a3a'
+        ctx.beginPath(); ctx.arc(ex, ey, 1.5, 0, Math.PI * 2); ctx.fill()
+        ctx.fillStyle = '#ffffff'
+        ctx.beginPath(); ctx.arc(ex, ey, 0.7, 0, Math.PI * 2); ctx.fill()
       }
     }
 
-    // central keep (tallest, in middle)
-    const kw = W * 0.32
-    const kh = H * 0.82
-    const kx = W / 2 - kw / 2
-    const ky = H - kh - 3
-    rrect(ctx, kx - 1, ky, kw + 2, kh, 3, col.dark)
-    const kGrad = ctx.createLinearGradient(0, ky, 0, ky + kh)
-    kGrad.addColorStop(0, col.light)
-    kGrad.addColorStop(0.4, col.primary)
-    kGrad.addColorStop(1, col.dark)
-    rrect(ctx, kx, ky + 1, kw, kh - 1, 2, kGrad as any)
-    px(ctx, kx, ky + 1, kw, 2, col.light)
-    px(ctx, kx, ky + kh * 0.4, kw, 1, col.dark)
-    px(ctx, kx, ky + kh * 0.4 + 1, kw, 1, col.trim)
-    // keep crenellated top
-    const kcn = 5
-    for (let i = 0; i < kcn; i++) {
-      if (i % 2 === 0) {
-        const bx = kx + 1 + i * ((kw - 2) / kcn)
-        rrect(ctx, bx, ky - 4, (kw - 2) / kcn - 1, 4, 1, col.dark)
-        px(ctx, bx, ky - 4, (kw - 2) / kcn - 1, 1, col.light)
-      }
-    }
-    // keep pyramidal roof
-    ctx.fillStyle = '#3a2a1a'
-    ctx.beginPath()
-    ctx.moveTo(kx - 2, ky)
-    ctx.lineTo(kx + kw / 2, ky - 14)
-    ctx.lineTo(kx + kw + 2, ky)
-    ctx.closePath()
-    ctx.fill()
-    ctx.fillStyle = '#1a0e04'
-    ctx.beginPath()
-    ctx.moveTo(kx + kw / 2, ky - 14)
-    ctx.lineTo(kx + kw + 2, ky)
-    ctx.lineTo(kx + kw / 2 + 1, ky)
-    ctx.closePath()
-    ctx.fill()
-    // roof ridge highlight
-    px(ctx, kx + kw / 2, ky - 14, 1, 14, '#5a4a3a')
-
-    // keep large stained-glass windows (glowing)
-    for (const wy of [ky + kh * 0.18, ky + kh * 0.5]) {
-      rrect(ctx, kx + 4, wy, 6, 8, 1, '#ffd060')
-      px(ctx, kx + 4, wy, 6, 2, '#fff8c0')
-      px(ctx, kx + 5, wy + 2, 1, 6, col.dark)
-      rrect(ctx, kx + kw - 10, wy, 6, 8, 1, '#ffd060')
-      px(ctx, kx + kw - 10, wy, 6, 2, '#fff8c0')
-      px(ctx, kx + kw - 8, wy + 2, 1, 6, col.dark)
-    }
-    // central keep roundel (faction emblem)
-    ctx.fillStyle = col.flag
-    ctx.beginPath(); ctx.arc(W / 2, ky + kh * 0.32, 3, 0, Math.PI * 2); ctx.fill()
+    // --- Faction banner (vertical hanging flag from tower) ---
+    px(ctx, tx + tw - 6, ty + 2, 1, 14, '#1a1a1a')
+    rrect(ctx, tx + tw - 5, ty + 2, 6, 12, 1, col.flag)
+    px(ctx, tx + tw - 5, ty + 2, 6, 1, col.trim)
     ctx.fillStyle = col.trim
-    ctx.beginPath(); ctx.arc(W / 2, ky + kh * 0.32, 1.5, 0, Math.PI * 2); ctx.fill()
+    ctx.beginPath(); ctx.arc(tx + tw - 2, ty + 8, 1.2, 0, Math.PI * 2); ctx.fill()
 
-    // main gate (large arched double door)
-    const gateW = W * 0.22
-    const gateH = H * 0.2
-    const gateX = W / 2 - gateW / 2
-    const gateY = H - gateH - 3
-    ctx.fillStyle = '#1a1208'
-    ctx.beginPath()
-    ctx.moveTo(gateX, gateY + gateH)
-    ctx.lineTo(gateX, gateY + 4)
-    ctx.quadraticCurveTo(gateX, gateY, gateX + gateW / 2, gateY)
-    ctx.quadraticCurveTo(gateX + gateW, gateY, gateX + gateW, gateY + 4)
-    ctx.lineTo(gateX + gateW, gateY + gateH)
-    ctx.closePath()
-    ctx.fill()
-    // gate arch trim
-    px(ctx, gateX, gateY + 1, gateW, 1, col.trim)
-    // gate vertical seam + horizontal bands
-    ctx.strokeStyle = col.dark; ctx.lineWidth = 1
-    ctx.beginPath(); ctx.moveTo(W / 2, gateY); ctx.lineTo(W / 2, gateY + gateH); ctx.stroke()
-    for (let i = 1; i < 3; i++) {
-      const by = gateY + (gateH * i / 3)
-      ctx.beginPath(); ctx.moveTo(gateX, by); ctx.lineTo(gateX + gateW, by); ctx.stroke()
-    }
-    // gate rivets
-    ctx.fillStyle = col.flag
-    ctx.beginPath(); ctx.arc(gateX + 3, gateY + gateH * 0.5, 1, 0, Math.PI * 2); ctx.fill()
-    ctx.beginPath(); ctx.arc(gateX + gateW - 3, gateY + gateH * 0.5, 1, 0, Math.PI * 2); ctx.fill()
-
-    // large central flag on keep roof
-    const flagX = kx + kw / 2
-    const flagY = ky - 14
-    px(ctx, flagX, flagY - 12, 1, 14, '#5a4a3a')
-    ctx.fillStyle = col.flag
-    ctx.beginPath()
-    ctx.moveTo(flagX + 1, flagY - 12)
-    ctx.lineTo(flagX + 9, flagY - 9)
-    ctx.lineTo(flagX + 1, flagY - 6)
-    ctx.closePath()
-    ctx.fill()
-    // flag emblem stripe
-    px(ctx, flagX + 2, flagY - 10, 5, 1, col.trim)
-    // flagpole finial
-    ctx.fillStyle = col.trim
-    ctx.beginPath(); ctx.arc(flagX, flagY - 13, 1, 0, Math.PI * 2); ctx.fill()
-
-    // small wall torches/glow points along crenellations
-    for (let i = 0; i < 4; i++) {
-      const tx = 14 + i * (W - 28) / 3
-      ctx.fillStyle = '#ffd060'
-      ctx.beginPath(); ctx.arc(tx, wallTop + 6, 1.2, 0, Math.PI * 2); ctx.fill()
-      ctx.fillStyle = '#fff8c0'
-      ctx.beginPath(); ctx.arc(tx, wallTop + 6, 0.5, 0, Math.PI * 2); ctx.fill()
-    }
-  } else if (type === 'barracks') {
-    // ===== BARRACKS (2x2 = 80x80): Military compound — sloped roof,
-    // antenna with flag, sandbags, door, windows, crates =====
-
-    // back wall mass
-    const wallTop = H * 0.36
-    const wallBottom = H - 4
-    rrect(ctx, 6, wallTop, W - 12, wallBottom - wallTop, 3, col.dark)
-    const wallGrad = ctx.createLinearGradient(0, wallTop, 0, wallBottom)
-    wallGrad.addColorStop(0, col.light)
-    wallGrad.addColorStop(0.5, col.primary)
-    wallGrad.addColorStop(1, col.dark)
-    rrect(ctx, 8, wallTop + 2, W - 16, wallBottom - wallTop - 4, 2, wallGrad as any)
-
-    // sloped roof (large triangular pediment)
-    const roofPeakY = H * 0.18
-    const roofBaseY = wallTop + 2
-    ctx.fillStyle = '#2a1a0a'
-    ctx.beginPath()
-    ctx.moveTo(4, roofBaseY)
-    ctx.lineTo(W / 2, roofPeakY)
-    ctx.lineTo(W - 4, roofBaseY)
-    ctx.closePath()
-    ctx.fill()
-    // roof highlight (left half — lit side)
-    ctx.fillStyle = '#3a2a1a'
-    ctx.beginPath()
-    ctx.moveTo(4, roofBaseY)
-    ctx.lineTo(W / 2, roofPeakY)
-    ctx.lineTo(W / 2, roofBaseY + 2)
-    ctx.closePath()
-    ctx.fill()
-    // roof ridge line
-    px(ctx, W / 2, roofPeakY, 1, roofBaseY - roofPeakY, '#5a4a3a')
-    // roof eave trim
-    px(ctx, 4, roofBaseY, W - 8, 2, '#3a2a1a')
-    px(ctx, 4, roofBaseY, W - 8, 1, col.dark)
-
-    // roof skylight (small glowing slit)
-    px(ctx, W / 2 - 4, roofPeakY + 6, 8, 2, '#ffd060')
-    px(ctx, W / 2 - 4, roofPeakY + 6, 8, 1, '#fff8c0')
-
-    // faction stripe (military band)
-    px(ctx, 8, wallTop + 8, W - 16, 3, col.light)
-    px(ctx, 8, wallTop + 11, W - 16, 1, col.trim)
-    // small chevrons on stripe
-    for (let i = 0; i < 4; i++) {
-      const cx2 = 14 + i * (W - 28) / 3
-      ctx.fillStyle = col.dark
-      ctx.beginPath()
-      ctx.moveTo(cx2, wallTop + 8)
-      ctx.lineTo(cx2 + 2, wallTop + 11)
-      ctx.lineTo(cx2 + 4, wallTop + 8)
-      ctx.closePath()
-      ctx.fill()
-    }
-
-    // tall antenna with flag (on roof peak)
-    const antX = W / 2 - 8
-    px(ctx, antX, H * 0.06, 1, roofPeakY - H * 0.06 + 2, '#6a6a6a')
-    // antenna crossbars
-    px(ctx, antX - 2, H * 0.1, 5, 1, '#6a6a6a')
-    px(ctx, antX - 2, H * 0.14, 5, 1, '#6a6a6a')
-    // antenna top beacon (glowing)
-    ctx.fillStyle = '#ff4040'
-    ctx.beginPath(); ctx.arc(antX, H * 0.05, 1.5, 0, Math.PI * 2); ctx.fill()
-    ctx.fillStyle = '#ffa0a0'
-    ctx.beginPath(); ctx.arc(antX, H * 0.05, 0.6, 0, Math.PI * 2); ctx.fill()
-    // flag on antenna
-    ctx.fillStyle = col.flag
-    ctx.beginPath()
-    ctx.moveTo(antX + 1, H * 0.08)
-    ctx.lineTo(antX + 7, H * 0.11)
-    ctx.lineTo(antX + 1, H * 0.14)
-    ctx.closePath()
-    ctx.fill()
-    px(ctx, antX + 2, H * 0.1, 4, 1, col.trim)
-
-    // large central double door
+    // --- Main blast door (rectangular, with hazard stripes) ---
     const doorW = W * 0.22
-    const doorH = H * 0.22
+    const doorH = H * 0.18
     const doorX = W / 2 - doorW / 2
     const doorY = H - doorH - 3
-    rrect(ctx, doorX, doorY, doorW, doorH, 2, '#1a1208')
-    px(ctx, doorX, doorY, doorW, 1, col.trim)
-    // door seam + panels
-    ctx.strokeStyle = col.dark; ctx.lineWidth = 1
-    ctx.beginPath(); ctx.moveTo(W / 2, doorY); ctx.lineTo(W / 2, doorY + doorH); ctx.stroke()
-    ctx.beginPath(); ctx.moveTo(doorX, doorY + doorH / 2); ctx.lineTo(doorX + doorW, doorY + doorH / 2); ctx.stroke()
-    // door handles
-    px(ctx, W / 2 - 2, doorY + doorH / 2 - 1, 1, 2, col.flag)
-    px(ctx, W / 2 + 1, doorY + doorH / 2 - 1, 1, 2, col.flag)
-
-    // side windows (4 — 2 per side)
-    const winY = wallTop + 20
-    for (const wx of [12, 22, W - 26, W - 16]) {
-      rrect(ctx, wx, winY, 6, 6, 1, '#ffd060')
-      px(ctx, wx, winY, 6, 1, '#fff8c0')
-      px(ctx, wx + 2, winY + 1, 1, 5, col.dark)
-      // window frame
-      px(ctx, wx - 1, winY - 1, 8, 1, col.dark)
+    rrect(ctx, doorX - 2, doorY - 2, doorW + 4, doorH + 4, 2, '#1a1a1a')
+    const doorGrad = ctx.createLinearGradient(0, doorY, 0, doorY + doorH)
+    doorGrad.addColorStop(0, '#5a5a5a')
+    doorGrad.addColorStop(0.5, '#3a3a3a')
+    doorGrad.addColorStop(1, '#1a1a1a')
+    rrect(ctx, doorX, doorY, doorW, doorH, 1, doorGrad as any)
+    px(ctx, W / 2, doorY, 1, doorH, '#0a0a0a')
+    for (let i = 0; i < 6; i++) {
+      px(ctx, doorX + i * (doorW / 6), doorY + 2, doorW / 6, 2, i % 2 === 0 ? '#ffaa30' : '#1a1a1a')
     }
+    for (let i = 1; i < 3; i++) {
+      px(ctx, doorX + 1, doorY + (doorH * i / 3), doorW - 2, 1, '#1a1a1a')
+    }
+    px(ctx, doorX + 3, doorY + doorH - 5, 2, 2, col.flag)
+    px(ctx, doorX + doorW - 5, doorY + doorH - 5, 2, 2, col.flag)
 
-    // sandbag emplacements at front corners (defensive)
+    // --- Side wall vents (vertical louvered slits) ---
     for (const side of [0, 1]) {
-      const baseX = side === 0 ? 2 : W - 18
-      for (let row = 0; row < 2; row++) {
-        for (let i = 0; i < 3; i++) {
-          const bx = baseX + i * 5
-          const by = H - 8 - row * 4
-          rrect(ctx, bx, by, 5, 4, 2, row === 0 ? '#8a7040' : '#7a6030')
-          px(ctx, bx, by, 5, 1, '#a08450')
-          // sandbag seam
-          px(ctx, bx + 2, by + 1, 1, 2, '#5a4830')
-        }
+      const vx = side === 0 ? 5 : W - 11
+      for (let i = 0; i < 4; i++) {
+        const vy = baseTop + 14 + i * 6
+        px(ctx, vx, vy, 6, 2, '#1a1a1a')
+        px(ctx, vx, vy, 6, 1, '#3a3a3a')
       }
     }
 
-    // supply crates near door
-    rrect(ctx, W / 2 - 14, H - 10, 4, 5, 1, '#6a4a2a')
-    px(ctx, W / 2 - 14, H - 10, 4, 1, '#8a6a3a')
-    px(ctx, W / 2 - 14, H - 8, 4, 1, '#4a3010')
-    rrect(ctx, W / 2 + 10, H - 10, 4, 5, 1, '#6a4a2a')
-    px(ctx, W / 2 + 10, H - 10, 4, 1, '#8a6a3a')
-    px(ctx, W / 2 + 10, H - 8, 4, 1, '#4a3010')
+    // --- Rooftop solar array (flat dark panels on base top edge) ---
+    for (let i = 0; i < 3; i++) {
+      const sx = 8 + i * 22
+      rrect(ctx, sx, baseTop - 4, 18, 4, 1, '#1a1a1a')
+      rrect(ctx, sx + 1, baseTop - 3, 16, 2, 1, '#1a2a4a')
+      px(ctx, sx + 1, baseTop - 3, 16, 1, '#3a5a8a')
+      px(ctx, sx + 6, baseTop - 3, 1, 2, '#0a1a2a')
+      px(ctx, sx + 12, baseTop - 3, 1, 2, '#0a1a2a')
+    }
 
-    // small vent pipes on roof
-    px(ctx, W * 0.3, roofPeakY + 4, 2, 4, '#5a5a5a')
-    px(ctx, W * 0.3 - 1, roofPeakY + 4, 4, 1, '#3a3a3a')
-    px(ctx, W * 0.7 - 2, roofPeakY + 4, 2, 4, '#5a5a5a')
-    px(ctx, W * 0.7 - 3, roofPeakY + 4, 4, 1, '#3a3a3a')
-  } else if (type === 'factory') {
-    // ===== FACTORY (3x2 = 120x80): Industrial building — 2 chimneys + smoke,
-    // sawtooth roof, big garage door, pipes, control room =====
+    // --- Ground-level exhaust vents (small glowing amber lights) ---
+    for (let i = 0; i < 4; i++) {
+      const lx = 14 + i * (W - 28) / 3
+      ctx.fillStyle = '#ffaa30'
+      ctx.beginPath(); ctx.arc(lx, H - 6, 1, 0, Math.PI * 2); ctx.fill()
+      ctx.fillStyle = '#ffe080'
+      ctx.beginPath(); ctx.arc(lx, H - 6, 0.4, 0, Math.PI * 2); ctx.fill()
+    }
+  } else if (type === 'barracks') {
+    // ===== BARRACKS (2x2 = 80x80): Angular prefab military structure =====
+    // Flat roof, vertical slit windows (glowing), blast door, coolant pipes, antenna array
 
-    // main structure (wide)
-    const wallTop = H * 0.4
+    // --- Main structure (angular prefab box) ---
+    const wallTop = H * 0.36
     const wallBottom = H - 4
-    rrect(ctx, 4, wallTop, W - 8, wallBottom - wallTop, 3, col.dark)
+    rrect(ctx, 6, wallTop, W - 12, wallBottom - wallTop, 2, '#1a1a1a')
     const wallGrad = ctx.createLinearGradient(0, wallTop, 0, wallBottom)
-    wallGrad.addColorStop(0, col.light)
-    wallGrad.addColorStop(0.4, col.primary)
-    wallGrad.addColorStop(1, col.dark)
-    rrect(ctx, 6, wallTop + 2, W - 12, wallBottom - wallTop - 4, 2, wallGrad as any)
-    px(ctx, 6, wallTop + 2, W - 12, 2, col.light)
-    // horizontal accent stripe
-    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.55, W - 12, 2, col.dark)
-    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.55 + 2, W - 12, 1, col.trim)
+    wallGrad.addColorStop(0, '#7a7a7a')
+    wallGrad.addColorStop(0.4, '#5a5a5a')
+    wallGrad.addColorStop(1, '#2a2a2a')
+    rrect(ctx, 8, wallTop + 1, W - 16, wallBottom - wallTop - 2, 1, wallGrad as any)
+    // top edge highlight (metal rim)
+    px(ctx, 8, wallTop + 1, W - 16, 1, '#9a9a9a')
+    // horizontal panel seam line
+    px(ctx, 8, wallTop + (wallBottom - wallTop) * 0.5, W - 16, 1, '#1a1a1a')
+    px(ctx, 8, wallTop + (wallBottom - wallTop) * 0.5 + 1, W - 16, 1, '#5a5a5a')
 
-    // sawtooth roof (multiple triangular peaks spanning the wide factory)
-    const numPeaks = 6
-    const peakW = (W - 12) / numPeaks
-    const peakBaseY = wallTop + 2
-    const peakTopY = H * 0.24
-    for (let i = 0; i < numPeaks; i++) {
-      const bx = 6 + i * peakW
-      // glass face of sawtooth (lit, lighter)
-      ctx.fillStyle = col.light
+    // --- Flat roof pad with beveled edges ---
+    rrect(ctx, 4, wallTop - 4, W - 8, 6, 1, '#1a1a1a')
+    rrect(ctx, 5, wallTop - 3, W - 10, 4, 1, '#5a5a5a')
+    px(ctx, 5, wallTop - 3, W - 10, 1, '#8a8a8a')
+    // beveled corner cuts (angular)
+    px(ctx, 4, wallTop - 4, 3, 1, '#1a1a1a')
+    px(ctx, W - 7, wallTop - 4, 3, 1, '#1a1a1a')
+    // rooftop equipment housing
+    rrect(ctx, W * 0.3, wallTop - 8, W * 0.4, 5, 1, '#3a3a3a')
+    px(ctx, W * 0.3, wallTop - 8, W * 0.4, 1, '#6a6a6a')
+    // rooftop vent slits (glowing amber)
+    for (let i = 0; i < 4; i++) {
+      const vx = W * 0.3 + 3 + i * (W * 0.4 - 6) / 3
+      px(ctx, vx, wallTop - 7, 2, 3, '#1a1a1a')
+      px(ctx, vx, wallTop - 6, 2, 1, '#ffaa30')
+    }
+
+    // --- Antenna array (multiple antennas on roof) ---
+    // main antenna (tall, with red beacon)
+    const antX = W * 0.25
+    const antTopY = H * 0.06
+    px(ctx, antX, antTopY, 1, wallTop - 4 - antTopY, '#5a5a5a')
+    px(ctx, antX - 2, antTopY + 6, 5, 1, '#5a5a5a')
+    px(ctx, antX - 1, antTopY + 12, 3, 1, '#5a5a5a')
+    const antBeaconGrad = ctx.createRadialGradient(antX, antTopY, 0, antX, antTopY, 3)
+    antBeaconGrad.addColorStop(0, '#ffa0a0')
+    antBeaconGrad.addColorStop(0.5, '#ff4040')
+    antBeaconGrad.addColorStop(1, 'rgba(255,64,64,0)')
+    ctx.fillStyle = antBeaconGrad
+    ctx.fillRect(antX - 3, antTopY - 3, 6, 6)
+    ctx.fillStyle = '#ff4040'
+    ctx.beginPath(); ctx.arc(antX, antTopY, 1.2, 0, Math.PI * 2); ctx.fill()
+
+    // secondary antenna (shorter, cyan tip)
+    const ant2X = W * 0.75
+    const ant2TopY = H * 0.14
+    px(ctx, ant2X, ant2TopY, 1, wallTop - 4 - ant2TopY, '#5a5a5a')
+    px(ctx, ant2X - 1, ant2TopY + 4, 3, 1, '#5a5a5a')
+    const ant2Grad = ctx.createRadialGradient(ant2X, ant2TopY, 0, ant2X, ant2TopY, 3)
+    ant2Grad.addColorStop(0, '#c0f4ff')
+    ant2Grad.addColorStop(0.5, '#00d0ff')
+    ant2Grad.addColorStop(1, 'rgba(0,208,255,0)')
+    ctx.fillStyle = ant2Grad
+    ctx.fillRect(ant2X - 3, ant2TopY - 3, 6, 6)
+    ctx.fillStyle = '#00d0ff'
+    ctx.beginPath(); ctx.arc(ant2X, ant2TopY, 1, 0, Math.PI * 2); ctx.fill()
+
+    // communications dish (small angled line)
+    const dishX = W / 2
+    const dishTopY = H * 0.16
+    px(ctx, dishX, dishTopY, 1, wallTop - 4 - dishTopY, '#5a5a5a')
+    ctx.strokeStyle = '#7a7a7a'; ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(dishX - 3, dishTopY + 2)
+    ctx.lineTo(dishX + 3, dishTopY)
+    ctx.stroke()
+    ctx.fillStyle = '#00d0ff'
+    ctx.beginPath(); ctx.arc(dishX, dishTopY + 1, 0.8, 0, Math.PI * 2); ctx.fill()
+
+    // --- External coolant pipes (horizontal pipes along wall) ---
+    const pipeY = wallTop + (wallBottom - wallTop) * 0.5 + 8
+    ctx.strokeStyle = '#3a3a3a'; ctx.lineWidth = 3
+    ctx.beginPath()
+    ctx.moveTo(10, pipeY)
+    ctx.lineTo(28, pipeY)
+    ctx.lineTo(28, pipeY - 4)
+    ctx.lineTo(40, pipeY - 4)
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.moveTo(W - 40, pipeY - 4)
+    ctx.lineTo(W - 28, pipeY - 4)
+    ctx.lineTo(W - 28, pipeY)
+    ctx.lineTo(W - 10, pipeY)
+    ctx.stroke()
+    // pipe highlights
+    ctx.strokeStyle = '#6a6a6a'; ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(10, pipeY - 1); ctx.lineTo(28, pipeY - 1)
+    ctx.moveTo(W - 28, pipeY - 1); ctx.lineTo(W - 10, pipeY - 1)
+    ctx.stroke()
+    // pipe joints (flanges)
+    for (const jx of [28, W - 28]) {
+      rrect(ctx, jx - 2, pipeY - 5, 4, 8, 1, '#5a5a5a')
+      px(ctx, jx - 2, pipeY - 5, 4, 1, '#8a8a8a')
+    }
+    // coolant vent glow (cyan dots at pipe ends)
+    for (const vx of [40, W - 40]) {
+      const cg = ctx.createRadialGradient(vx, pipeY - 4, 0, vx, pipeY - 4, 3)
+      cg.addColorStop(0, '#c0f4ff')
+      cg.addColorStop(0.5, '#00d0ff')
+      cg.addColorStop(1, 'rgba(0,208,255,0)')
+      ctx.fillStyle = cg
+      ctx.fillRect(vx - 3, pipeY - 7, 6, 6)
+      ctx.fillStyle = '#00d0ff'
+      ctx.beginPath(); ctx.arc(vx, pipeY - 4, 0.8, 0, Math.PI * 2); ctx.fill()
+    }
+
+    // --- Vertical slit windows (glowing cyan, 2 rows x 2 columns on sides) ---
+    const winY1 = wallTop + 14
+    const winY2 = wallTop + 26
+    for (const wy of [winY1, winY2]) {
+      for (const wx of [12, W - 16]) {
+        rrect(ctx, wx, wy, 4, 6, 1, '#0080a0')
+        rrect(ctx, wx, wy + 1, 4, 4, 1, '#00d0ff')
+        px(ctx, wx, wy, 4, 1, '#80e8ff')
+        // window frame
+        px(ctx, wx - 1, wy - 1, 6, 1, '#1a1a1a')
+        px(ctx, wx - 1, wy + 6, 6, 1, '#1a1a1a')
+      }
+    }
+
+    // --- Central blast door ---
+    const doorW = W * 0.22
+    const doorH = H * 0.26
+    const doorX = W / 2 - doorW / 2
+    const doorY = H - doorH - 3
+    rrect(ctx, doorX - 2, doorY - 2, doorW + 4, doorH + 4, 2, '#1a1a1a')
+    const doorGrad = ctx.createLinearGradient(0, doorY, 0, doorY + doorH)
+    doorGrad.addColorStop(0, '#5a5a5a')
+    doorGrad.addColorStop(0.6, '#3a3a3a')
+    doorGrad.addColorStop(1, '#1a1a1a')
+    rrect(ctx, doorX, doorY, doorW, doorH, 1, doorGrad as any)
+    // door seam (vertical)
+    px(ctx, W / 2, doorY, 1, doorH, '#0a0a0a')
+    // door panel lines (horizontal)
+    for (let i = 1; i < 4; i++) {
+      px(ctx, doorX + 1, doorY + (doorH * i / 4), doorW - 2, 1, '#1a1a1a')
+      px(ctx, doorX + 1, doorY + (doorH * i / 4) + 1, doorW - 2, 1, '#4a4a4a')
+    }
+    // hazard stripes at top
+    const dhazN = 4
+    for (let i = 0; i < dhazN; i++) {
+      px(ctx, doorX + 1 + i * (doorW - 2) / dhazN, doorY + 2, (doorW - 2) / dhazN, 2, i % 2 === 0 ? '#ffaa30' : '#1a1a1a')
+    }
+    // door control panel (faction indicator)
+    rrect(ctx, W / 2 - 3, doorY + doorH - 8, 6, 4, 1, '#1a1a1a')
+    px(ctx, W / 2 - 2, doorY + doorH - 7, 4, 1, col.flag)
+    px(ctx, W / 2 - 2, doorY + doorH - 5, 2, 1, col.trim)
+
+    // --- Faction stripe (subtle accent along wall) ---
+    px(ctx, 8, wallTop + 6, W - 16, 1, col.primary)
+    px(ctx, 8, wallTop + 7, W - 16, 1, col.dark)
+
+    // --- Side external reinforcement pillars (angular buttresses) ---
+    for (const side of [0, 1]) {
+      const bx = side === 0 ? 6 : W - 11
+      rrect(ctx, bx, wallTop + 2, 5, wallBottom - wallTop - 4, 1, '#2a2a2a')
+      const bGrad = ctx.createLinearGradient(bx, 0, bx + 5, 0)
+      bGrad.addColorStop(0, '#5a5a5a')
+      bGrad.addColorStop(0.5, '#6a6a6a')
+      bGrad.addColorStop(1, '#2a2a2a')
+      rrect(ctx, bx + 1, wallTop + 3, 3, wallBottom - wallTop - 6, 1, bGrad as any)
+      // pillar rivets
+      for (let i = 0; i < 3; i++) {
+        const ry = wallTop + 8 + i * 12
+        px(ctx, bx + 1, ry, 3, 1, '#1a1a1a')
+      }
+    }
+
+    // --- Hazard line on ground (front of door) ---
+    for (let i = 0; i < 10; i++) {
+      px(ctx, doorX - 4 + i * 4, H - 4, 2, 1, i % 2 === 0 ? '#ffaa30' : '#1a1a1a')
+    }
+  } else if (type === 'factory') {
+    // ===== FACTORY (3x2 = 120x80): Wide industrial facility =====
+    // Flat sawtooth glass roof + 2 chimneys with heat vents + cargo bay door + pipes
+
+    // --- Main structure (wide metallic housing) ---
+    const wallTop = H * 0.44
+    const wallBottom = H - 4
+    rrect(ctx, 4, wallTop, W - 8, wallBottom - wallTop, 2, '#1a1a1a')
+    const wallGrad = ctx.createLinearGradient(0, wallTop, 0, wallBottom)
+    wallGrad.addColorStop(0, '#6a6a6a')
+    wallGrad.addColorStop(0.4, '#4a4a4a')
+    wallGrad.addColorStop(1, '#2a2a2a')
+    rrect(ctx, 6, wallTop + 1, W - 12, wallBottom - wallTop - 2, 1, wallGrad as any)
+    px(ctx, 6, wallTop + 1, W - 12, 1, '#8a8a8a')
+    // horizontal accent bands (panel divisions)
+    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.4, W - 12, 1, '#1a1a1a')
+    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.4 + 1, W - 12, 1, '#5a5a5a')
+    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.7, W - 12, 1, '#1a1a1a')
+    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.7 + 1, W - 12, 1, '#5a5a5a')
+
+    // --- Flat sawtooth roof (angular glass panels, NOT pitched) ---
+    const numSaw = 6
+    const sawW = (W - 12) / numSaw
+    const sawBaseY = wallTop + 2
+    const sawTopY = H * 0.28
+    for (let i = 0; i < numSaw; i++) {
+      const bx = 6 + i * sawW
+      // glass face (angled, dark blue-gray glass with cyan tint)
+      ctx.fillStyle = '#1a2a3a'
       ctx.beginPath()
-      ctx.moveTo(bx, peakBaseY)
-      ctx.lineTo(bx + peakW * 0.55, peakTopY)
-      ctx.lineTo(bx + peakW, peakBaseY)
+      ctx.moveTo(bx, sawBaseY)
+      ctx.lineTo(bx + sawW * 0.6, sawTopY)
+      ctx.lineTo(bx + sawW, sawBaseY)
       ctx.closePath()
       ctx.fill()
-      // bright glazing bars
-      ctx.strokeStyle = col.trim; ctx.lineWidth = 1
-      for (let g = 1; g < 4; g++) {
-        const gx2 = bx + (peakW * 0.55) * (g / 4)
+      // glass inner highlight (cyan tint gradient)
+      const glassGrad = ctx.createLinearGradient(bx, sawBaseY, bx, sawTopY)
+      glassGrad.addColorStop(0, '#1a2a3a')
+      glassGrad.addColorStop(0.7, '#3a5a7a')
+      glassGrad.addColorStop(1, '#5a8aaa')
+      ctx.fillStyle = glassGrad
+      ctx.beginPath()
+      ctx.moveTo(bx + 1, sawBaseY - 1)
+      ctx.lineTo(bx + sawW * 0.6 - 1, sawTopY + 1)
+      ctx.lineTo(bx + sawW - 1, sawBaseY - 1)
+      ctx.closePath()
+      ctx.fill()
+      // glazing bars (vertical lines on glass)
+      ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1
+      for (let g = 1; g < 3; g++) {
+        const gx2 = bx + (sawW * 0.6) * (g / 3)
         ctx.beginPath()
-        ctx.moveTo(gx2, peakBaseY)
-        ctx.lineTo(gx2 + peakW * 0.55 * 0.25, peakTopY + (peakBaseY - peakTopY) * (1 - g / 4))
+        ctx.moveTo(gx2, sawBaseY)
+        ctx.lineTo(gx2 + sawW * 0.6 * 0.2, sawTopY + (sawBaseY - sawTopY) * (1 - g / 3))
         ctx.stroke()
       }
-      // shadow face (right side of each sawtooth)
-      ctx.fillStyle = col.dark
+      // shadow face (right side — vertical drop)
+      ctx.fillStyle = '#2a2a2a'
       ctx.beginPath()
-      ctx.moveTo(bx + peakW * 0.55, peakTopY)
-      ctx.lineTo(bx + peakW, peakTopY + (peakBaseY - peakTopY) * 0.4)
-      ctx.lineTo(bx + peakW, peakBaseY)
+      ctx.moveTo(bx + sawW * 0.6, sawTopY)
+      ctx.lineTo(bx + sawW, sawTopY + (sawBaseY - sawTopY) * 0.3)
+      ctx.lineTo(bx + sawW, sawBaseY)
       ctx.closePath()
       ctx.fill()
       // roof edge highlight
-      px(ctx, bx, peakBaseY, peakW, 1, col.dark)
+      px(ctx, bx, sawBaseY, sawW, 1, '#1a1a1a')
+      // small cyan glow strip at peak (factory interior lights)
+      px(ctx, bx + sawW * 0.6 - 1, sawTopY, 2, 1, '#00d0ff')
     }
-    // sawtooth ridge rail
-    ctx.strokeStyle = col.dark; ctx.lineWidth = 1
+    // sawtooth ridge rail (dark)
+    ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1
     ctx.beginPath()
-    for (let i = 0; i < numPeaks; i++) {
-      const bx = 6 + i * peakW
-      if (i === 0) ctx.moveTo(bx, peakBaseY)
-      ctx.lineTo(bx + peakW * 0.55, peakTopY)
-      ctx.lineTo(bx + peakW, peakBaseY)
+    for (let i = 0; i < numSaw; i++) {
+      const bx = 6 + i * sawW
+      if (i === 0) ctx.moveTo(bx, sawBaseY)
+      ctx.lineTo(bx + sawW * 0.6, sawTopY)
+      ctx.lineTo(bx + sawW, sawBaseY)
     }
     ctx.stroke()
 
-    // 2 industrial chimneys (right side, with smoke)
+    // --- 2 industrial chimneys (metallic cylinders with heat vents) ---
     const chimneys = [
-      { x: W - 36, h: H * 0.36 },
-      { x: W - 20, h: H * 0.42 },
+      { x: W - 38, h: H * 0.7 },
+      { x: W - 22, h: H * 0.8 },
     ]
     for (const ch of chimneys) {
       const cyTop = H - ch.h - 4
-      // chimney stack
-      rrect(ctx, ch.x, cyTop, 8, ch.h, 1, '#4a4a4a')
+      // chimney outer
+      rrect(ctx, ch.x, cyTop, 8, ch.h, 1, '#1a1a1a')
+      // chimney metallic gradient
       const chGrad = ctx.createLinearGradient(ch.x, 0, ch.x + 8, 0)
-      chGrad.addColorStop(0, '#5a5a5a')
-      chGrad.addColorStop(0.5, '#3a3a3a')
-      chGrad.addColorStop(1, '#2a2a2a')
+      chGrad.addColorStop(0, '#2a2a2a')
+      chGrad.addColorStop(0.3, '#5a5a5a')
+      chGrad.addColorStop(0.6, '#4a4a4a')
+      chGrad.addColorStop(1, '#1a1a1a')
       rrect(ctx, ch.x + 1, cyTop, 6, ch.h, 1, chGrad as any)
-      // chimney lip
-      rrect(ctx, ch.x - 1, cyTop - 2, 10, 3, 1, '#2a2a2a')
-      px(ctx, ch.x - 1, cyTop - 2, 10, 1, '#5a5a5a')
-      // chimney bands
-      px(ctx, ch.x - 1, cyTop + ch.h * 0.3, 10, 1, '#2a2a2a')
-      px(ctx, ch.x - 1, cyTop + ch.h * 0.65, 10, 1, '#2a2a2a')
-      // smoke puffs (rising)
-      const sx2 = ch.x + 4
-      ctx.fillStyle = 'rgba(200,200,200,0.7)'
-      ctx.beginPath(); ctx.arc(sx2, cyTop - 4, 3, 0, Math.PI * 2); ctx.fill()
-      ctx.fillStyle = 'rgba(180,180,180,0.55)'
-      ctx.beginPath(); ctx.arc(sx2 + 2, cyTop - 9, 4, 0, Math.PI * 2); ctx.fill()
-      ctx.fillStyle = 'rgba(210,210,210,0.4)'
-      ctx.beginPath(); ctx.arc(sx2 - 1, cyTop - 14, 5, 0, Math.PI * 2); ctx.fill()
-      ctx.fillStyle = 'rgba(220,220,220,0.25)'
-      ctx.beginPath(); ctx.arc(sx2 + 3, cyTop - 20, 6, 0, Math.PI * 2); ctx.fill()
+      // chimney top lip (flared)
+      rrect(ctx, ch.x - 2, cyTop - 3, 12, 4, 1, '#1a1a1a')
+      rrect(ctx, ch.x - 1, cyTop - 2, 10, 2, 1, '#4a4a4a')
+      px(ctx, ch.x - 1, cyTop - 2, 10, 1, '#7a7a7a')
+      // chimney bands (reinforcement rings)
+      px(ctx, ch.x, cyTop + ch.h * 0.25, 8, 1, '#1a1a1a')
+      px(ctx, ch.x, cyTop + ch.h * 0.25 + 1, 8, 1, '#4a4a4a')
+      px(ctx, ch.x, cyTop + ch.h * 0.55, 8, 1, '#1a1a1a')
+      px(ctx, ch.x, cyTop + ch.h * 0.55 + 1, 8, 1, '#4a4a4a')
+      px(ctx, ch.x, cyTop + ch.h * 0.85, 8, 1, '#1a1a1a')
+      // heat vent glow (amber/orange — hot exhaust at top)
+      const ventGrad = ctx.createRadialGradient(ch.x + 4, cyTop - 4, 0, ch.x + 4, cyTop - 4, 6)
+      ventGrad.addColorStop(0, '#ffe080')
+      ventGrad.addColorStop(0.4, '#ff8030')
+      ventGrad.addColorStop(1, 'rgba(255,128,48,0)')
+      ctx.fillStyle = ventGrad
+      ctx.fillRect(ch.x - 2, cyTop - 10, 14, 10)
+      ctx.fillStyle = '#ffe080'
+      ctx.beginPath(); ctx.arc(ch.x + 4, cyTop - 4, 0.8, 0, Math.PI * 2); ctx.fill()
+      // chimney hot interior (orange Ring inside top)
+      px(ctx, ch.x + 2, cyTop + 1, 4, 1, '#ff6020')
+      px(ctx, ch.x + 3, cyTop + 1, 2, 1, '#ffa050')
     }
 
-    // big garage door (left, industrial roll-up)
+    // --- Large cargo bay door (left side, with hazard markings) ---
     const gdX = 12
-    const gdW = W * 0.22
-    const gdH = H * 0.28
+    const gdW = W * 0.24
+    const gdH = H * 0.32
     const gdY = H - gdH - 3
-    rrect(ctx, gdX, gdY, gdW, gdH, 2, '#1a1208')
-    px(ctx, gdX, gdY, gdW, 1, col.trim)
-    // door horizontal panel lines (roll-up segments)
-    ctx.strokeStyle = col.dark; ctx.lineWidth = 1
-    const panels = 5
-    for (let i = 1; i < panels; i++) {
-      const py = gdY + (gdH * i / panels)
-      ctx.beginPath(); ctx.moveTo(gdX + 1, py); ctx.lineTo(gdX + gdW - 1, py); ctx.stroke()
-      px(ctx, gdX + 1, py - 1, gdW - 2, 1, '#0a0604')
+    rrect(ctx, gdX - 2, gdY - 2, gdW + 4, gdH + 4, 2, '#1a1a1a')
+    const gdGrad = ctx.createLinearGradient(0, gdY, 0, gdY + gdH)
+    gdGrad.addColorStop(0, '#4a4a4a')
+    gdGrad.addColorStop(0.5, '#2a2a2a')
+    gdGrad.addColorStop(1, '#1a1a1a')
+    rrect(ctx, gdX, gdY, gdW, gdH, 1, gdGrad as any)
+    // door panel lines (roll-up segments — horizontal)
+    for (let i = 1; i < 6; i++) {
+      px(ctx, gdX + 1, gdY + (gdH * i / 6), gdW - 2, 1, '#0a0a0a')
+      px(ctx, gdX + 1, gdY + (gdH * i / 6) + 1, gdW - 2, 1, '#4a4a4a')
     }
-    // door vertical center seam
-    ctx.beginPath(); ctx.moveTo(gdX + gdW / 2, gdY); ctx.lineTo(gdX + gdW / 2, gdY + gdH); ctx.stroke()
-    // door warning stripes (yellow-black hazard)
-    for (let i = 0; i < 4; i++) {
-      px(ctx, gdX + 2 + i * 6, gdY + gdH - 4, 3, 2, i % 2 === 0 ? '#ffd040' : '#1a1a1a')
+    // door vertical seams (2 panels)
+    for (let i = 1; i < 3; i++) {
+      px(ctx, gdX + (gdW * i / 3), gdY, 1, gdH, '#0a0a0a')
+    }
+    // hazard stripes at bottom of door (yellow-black)
+    for (let i = 0; i < 8; i++) {
+      px(ctx, gdX + 1 + i * (gdW - 2) / 8, gdY + gdH - 5, (gdW - 2) / 8, 3, i % 2 === 0 ? '#ffd040' : '#1a1a1a')
+    }
+    // door warning label (faction indicator)
+    rrect(ctx, gdX + gdW / 2 - 4, gdY + gdH / 2 - 3, 8, 6, 1, '#0a0a0a')
+    px(ctx, gdX + gdW / 2 - 3, gdY + gdH / 2 - 2, 6, 1, col.flag)
+    px(ctx, gdX + gdW / 2 - 3, gdY + gdH / 2, 4, 1, col.flag)
+    px(ctx, gdX + gdW / 2 - 3, gdY + gdH / 2 + 2, 2, 1, col.flag)
+
+    // --- Control room window (above door, glowing cyan) ---
+    rrect(ctx, gdX + 4, gdY - 12, gdW - 8, 8, 1, '#1a1a1a')
+    const winGrad = ctx.createLinearGradient(0, gdY - 12, 0, gdY - 4)
+    winGrad.addColorStop(0, '#0080a0')
+    winGrad.addColorStop(0.5, '#00d0ff')
+    winGrad.addColorStop(1, '#0080a0')
+    rrect(ctx, gdX + 5, gdY - 11, gdW - 10, 6, 1, winGrad as any)
+    px(ctx, gdX + 5, gdY - 11, gdW - 10, 1, '#80e8ff')
+    // window dividers
+    for (let i = 1; i < 4; i++) {
+      px(ctx, gdX + 5 + (gdW - 10) * i / 4, gdY - 11, 1, 6, '#1a1a1a')
     }
 
-    // control room window (above door, glowing)
-    rrect(ctx, gdX + 2, gdY - 12, gdW - 4, 8, 1, '#ffd060')
-    px(ctx, gdX + 2, gdY - 12, gdW - 4, 2, '#fff8c0')
-    px(ctx, gdX + gdW / 2 - 1, gdY - 12, 1, 8, col.dark)
-
-    // pipes running along the structure (right of door, connecting to back)
-    const pipeY1 = H * 0.65
-    const pipeY2 = H * 0.55
-    ctx.strokeStyle = '#6a6a6a'; ctx.lineWidth = 3
+    // --- External pipes and conduit (right of door) ---
+    const pipeY1 = H * 0.6
+    const pipeY2 = H * 0.5
+    ctx.strokeStyle = '#3a3a3a'; ctx.lineWidth = 3
     ctx.beginPath()
-    ctx.moveTo(gdX + gdW + 4, pipeY1)
+    ctx.moveTo(gdX + gdW + 6, pipeY1)
     ctx.lineTo(gdX + gdW + 24, pipeY1)
     ctx.lineTo(gdX + gdW + 24, pipeY2)
-    ctx.lineTo(W - 50, pipeY2)
+    ctx.lineTo(W - 52, pipeY2)
     ctx.stroke()
     // pipe highlight
-    ctx.strokeStyle = '#9a9a9a'; ctx.lineWidth = 1
+    ctx.strokeStyle = '#6a6a6a'; ctx.lineWidth = 1
     ctx.beginPath()
-    ctx.moveTo(gdX + gdW + 4, pipeY1 - 1)
+    ctx.moveTo(gdX + gdW + 6, pipeY1 - 1)
     ctx.lineTo(gdX + gdW + 24, pipeY1 - 1)
     ctx.lineTo(gdX + gdW + 24, pipeY2 - 1)
     ctx.stroke()
+    // second smaller conduit pipe
+    ctx.strokeStyle = '#4a4a4a'; ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.moveTo(gdX + gdW + 6, pipeY1 + 5)
+    ctx.lineTo(gdX + gdW + 30, pipeY1 + 5)
+    ctx.stroke()
     // pipe joints (flanges)
-    for (const jx of [gdX + gdW + 24, W - 60]) {
-      rrect(ctx, jx - 1, pipeY2 - 3, 4, 6, 1, '#8a8a8a')
-      px(ctx, jx - 1, pipeY2 - 3, 4, 1, '#a0a0a0')
+    for (const jx of [gdX + gdW + 24, W - 56]) {
+      rrect(ctx, jx - 2, pipeY2 - 3, 4, 6, 1, '#5a5a5a')
+      px(ctx, jx - 2, pipeY2 - 3, 4, 1, '#8a8a8a')
     }
     // valve wheels along pipe
-    for (const vx of [gdX + gdW + 10, W - 56]) {
-      ctx.fillStyle = '#8a8a8a'
-      ctx.beginPath(); ctx.arc(vx, pipeY1, 3, 0, Math.PI * 2); ctx.fill()
-      px(ctx, vx - 3, pipeY1, 7, 1, '#5a5a5a')
-      px(ctx, vx, pipeY1 - 3, 1, 7, '#5a5a5a')
-      px(ctx, vx - 2, pipeY1 - 2, 1, 1, '#5a5a5a')
-      px(ctx, vx + 2, pipeY1 - 2, 1, 1, '#5a5a5a')
-      px(ctx, vx, pipeY1, 1.5, 1.5, '#b0b0b0')
+    for (const vx of [gdX + gdW + 14, W - 50]) {
+      ctx.fillStyle = '#3a3a3a'
+      ctx.beginPath(); ctx.arc(vx, pipeY1, 3.5, 0, Math.PI * 2); ctx.fill()
+      ctx.fillStyle = '#5a5a5a'
+      ctx.beginPath(); ctx.arc(vx, pipeY1, 2.5, 0, Math.PI * 2); ctx.fill()
+      ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2
+        ctx.beginPath()
+        ctx.moveTo(vx, pipeY1)
+        ctx.lineTo(vx + Math.cos(a) * 3.5, pipeY1 + Math.sin(a) * 3.5)
+        ctx.stroke()
+      }
+      ctx.fillStyle = '#1a1a1a'
+      ctx.beginPath(); ctx.arc(vx, pipeY1, 1, 0, Math.PI * 2); ctx.fill()
     }
 
-    // side windows (industrial, multi-pane)
-    for (const wx of [W * 0.5, W * 0.62]) {
-      rrect(ctx, wx, wallTop + 12, 10, 8, 1, '#ffd060')
-      px(ctx, wx, wallTop + 12, 10, 2, '#fff8c0')
-      ctx.strokeStyle = col.dark; ctx.lineWidth = 1
-      ctx.beginPath(); ctx.moveTo(wx + 5, wallTop + 12); ctx.lineTo(wx + 5, wallTop + 20); ctx.stroke()
-      ctx.beginPath(); ctx.moveTo(wx, wallTop + 16); ctx.lineTo(wx + 10, wallTop + 16); ctx.stroke()
+    // --- Side multi-pane windows (industrial, glowing cyan) ---
+    for (const wx of [W * 0.55, W * 0.7]) {
+      rrect(ctx, wx, wallTop + 8, 12, 10, 1, '#1a1a1a')
+      const swg = ctx.createLinearGradient(0, wallTop + 8, 0, wallTop + 18)
+      swg.addColorStop(0, '#0080a0')
+      swg.addColorStop(1, '#00d0ff')
+      rrect(ctx, wx + 1, wallTop + 9, 10, 8, 1, swg as any)
+      px(ctx, wx + 1, wallTop + 9, 10, 1, '#80e8ff')
+      // window dividers
+      px(ctx, wx + 5, wallTop + 9, 1, 8, '#1a1a1a')
+      px(ctx, wx + 1, wallTop + 13, 10, 1, '#1a1a1a')
     }
 
-    // small loading ramp / floor accent near door
-    px(ctx, gdX - 2, H - 5, gdW + 4, 2, '#3a3a3a')
-    // hazard line on ground
-    for (let i = 0; i < 8; i++) {
-      px(ctx, gdX + i * 4, H - 3, 2, 1, i % 2 === 0 ? '#ffd040' : '#1a1a1a')
+    // --- Loading ramp / hazard zone on ground ---
+    px(ctx, gdX - 4, H - 5, gdW + 8, 2, '#2a2a2a')
+    for (let i = 0; i < 10; i++) {
+      px(ctx, gdX - 2 + i * 4, H - 3, 2, 1, i % 2 === 0 ? '#ffd040' : '#1a1a1a')
     }
   } else if (type === 'turret') {
-    // ===== TURRET (1x1 = 40x40): Keep existing design, works at 1x1 =====
+    // ===== TURRET (1x1 = 40x40): Energy cannon on rotating base =====
     const s = TILE_SIZE
-    // base platform (octagonal pad)
-    ctx.fillStyle = '#2a2a2a'
-    ctx.beginPath(); ctx.ellipse(s/2, s/2 + 5, 11, 7, 0, 0, Math.PI*2); ctx.fill()
-    px(ctx, s/2 - 9, s/2 + 4, 18, 5, col.dark)
-    px(ctx, s/2 - 8, s/2 + 3, 16, 1, col.primary)
-    px(ctx, s/2 - 8, s/2 + 8, 16, 1, '#1a1a1a')
-    // turret dome (hemisphere)
-    const domeGrad = ctx.createLinearGradient(0, s/2 - 6, 0, s/2 + 2)
-    domeGrad.addColorStop(0, col.light)
-    domeGrad.addColorStop(0.6, col.primary)
-    domeGrad.addColorStop(1, col.dark)
-    ctx.fillStyle = domeGrad as any
-    ctx.beginPath(); ctx.arc(s/2, s/2, 7, Math.PI, 0); ctx.fill()
-    // dome top highlight
-    px(ctx, s/2 - 5, s/2 - 5, 10, 1, col.light)
-    px(ctx, s/2 - 3, s/2 - 6, 6, 1, col.trim)
-    // dome rivet ring
-    for (let i = 0; i < 5; i++) {
-      const rx = s/2 - 5 + i * 2.5
-      px(ctx, rx, s/2 + 1, 1, 1, col.dark)
+
+    // --- Angular hexagonal base pad (reinforced) ---
+    ctx.fillStyle = '#1a1a1a'
+    ctx.beginPath()
+    ctx.moveTo(s / 2 - 13, s - 8)
+    ctx.lineTo(s / 2 - 9, s - 4)
+    ctx.lineTo(s / 2 + 9, s - 4)
+    ctx.lineTo(s / 2 + 13, s - 8)
+    ctx.lineTo(s / 2 + 11, s - 12)
+    ctx.lineTo(s / 2 - 11, s - 12)
+    ctx.closePath()
+    ctx.fill()
+    const padGrad = ctx.createLinearGradient(0, s - 12, 0, s - 4)
+    padGrad.addColorStop(0, '#6a6a6a')
+    padGrad.addColorStop(1, '#2a2a2a')
+    ctx.fillStyle = padGrad
+    ctx.beginPath()
+    ctx.moveTo(s / 2 - 12, s - 8)
+    ctx.lineTo(s / 2 - 9, s - 5)
+    ctx.lineTo(s / 2 + 9, s - 5)
+    ctx.lineTo(s / 2 + 12, s - 8)
+    ctx.lineTo(s / 2 + 10, s - 11)
+    ctx.lineTo(s / 2 - 10, s - 11)
+    ctx.closePath()
+    ctx.fill()
+    px(ctx, s / 2 - 10, s - 11, 20, 1, '#8a8a8a')
+    // base rivets
+    for (const rx of [s / 2 - 7, s / 2 + 7]) {
+      ctx.fillStyle = '#1a1a1a'
+      ctx.beginPath(); ctx.arc(rx, s - 7, 0.8, 0, Math.PI * 2); ctx.fill()
     }
-    // cannon mantlet
-    rrect(ctx, s/2 - 2, s/2 - 7, 4, 4, 1, '#2a2a2a')
-    px(ctx, s/2 - 2, s/2 - 7, 4, 1, col.dark)
-    // cannon barrel
-    px(ctx, s/2 - 1, s/2 - 8, 3, 5, '#2a2a2a')
-    px(ctx, s/2 - 2, s/2 - 9, 5, 1, '#1a1a1a')
-    px(ctx, s/2 + 2, s/2 - 8, 1, 4, '#3a3a3a')
-    // muzzle brake
-    px(ctx, s/2 - 1, s/2 - 9, 3, 1, '#5a5a5a')
-    px(ctx, s/2 - 2, s/2 - 10, 5, 1, '#3a3a3a')
-    // faction emblem on dome
+
+    // --- Rotating turret base (angular box) ---
+    rrect(ctx, s / 2 - 9, s - 22, 18, 11, 1, '#1a1a1a')
+    const tGrad = ctx.createLinearGradient(0, s - 22, 0, s - 11)
+    tGrad.addColorStop(0, '#7a7a7a')
+    tGrad.addColorStop(0.5, '#5a5a5a')
+    tGrad.addColorStop(1, '#2a2a2a')
+    rrect(ctx, s / 2 - 8, s - 21, 16, 9, 1, tGrad as any)
+    px(ctx, s / 2 - 8, s - 21, 16, 1, '#9a9a9a')
+    // vertical panel seams
+    px(ctx, s / 2 - 3, s - 21, 1, 9, '#1a1a1a')
+    px(ctx, s / 2 + 3, s - 21, 1, 9, '#1a1a1a')
+
+    // --- Energy cannon housing (raised mantlet) ---
+    rrect(ctx, s / 2 - 5, s - 28, 10, 7, 1, '#1a1a1a')
+    const mGrad = ctx.createLinearGradient(0, s - 28, 0, s - 21)
+    mGrad.addColorStop(0, '#6a6a6a')
+    mGrad.addColorStop(1, '#3a3a3a')
+    rrect(ctx, s / 2 - 4, s - 27, 8, 5, 1, mGrad as any)
+    px(ctx, s / 2 - 4, s - 27, 8, 1, '#8a8a8a')
+
+    // --- Energy cannon barrel (sleek, with glowing core) ---
+    px(ctx, s / 2 - 1, s - 33, 3, 7, '#1a1a1a')
+    px(ctx, s / 2, s - 33, 1, 7, '#4a4a4a')
+    // barrel muzzle ring
+    px(ctx, s / 2 - 2, s - 33, 5, 1, '#3a3a3a')
+    px(ctx, s / 2 - 2, s - 34, 5, 1, '#5a5a5a')
+
+    // --- Glowing power cell at base of barrel (cyan) ---
+    const cellGrad = ctx.createRadialGradient(s / 2, s - 25, 0, s / 2, s - 25, 4)
+    cellGrad.addColorStop(0, '#c0f4ff')
+    cellGrad.addColorStop(0.4, '#00d0ff')
+    cellGrad.addColorStop(1, 'rgba(0,208,255,0)')
+    ctx.fillStyle = cellGrad
+    ctx.fillRect(s / 2 - 4, s - 29, 8, 8)
+    ctx.fillStyle = '#00d0ff'
+    rrect(ctx, s / 2 - 2, s - 27, 5, 3, 1, '#00d0ff')
+    px(ctx, s / 2 - 2, s - 27, 5, 1, '#80e8ff')
+
+    // --- Muzzle glow (charging tip) ---
+    const muzzleGrad = ctx.createRadialGradient(s / 2, s - 33, 0, s / 2, s - 33, 4)
+    muzzleGrad.addColorStop(0, '#c0f4ff')
+    muzzleGrad.addColorStop(0.5, '#00d0ff')
+    muzzleGrad.addColorStop(1, 'rgba(0,208,255,0)')
+    ctx.fillStyle = muzzleGrad
+    ctx.fillRect(s / 2 - 4, s - 37, 8, 8)
+
+    // --- Faction emblem (on turret side) ---
     ctx.fillStyle = col.flag
-    ctx.beginPath(); ctx.arc(s/2, s/2 + 1, 1.5, 0, Math.PI * 2); ctx.fill()
-    px(ctx, s/2, s/2 + 1, 1, 1, col.trim)
+    ctx.beginPath(); ctx.arc(s / 2, s - 16, 1.5, 0, Math.PI * 2); ctx.fill()
+    px(ctx, s / 2, s - 16, 1, 1, col.trim)
+
+    // --- Side status lights (amber) ---
+    for (const lx of [s / 2 - 6, s / 2 + 5]) {
+      ctx.fillStyle = '#ffaa30'
+      ctx.beginPath(); ctx.arc(lx, s - 14, 0.7, 0, Math.PI * 2); ctx.fill()
+    }
   } else if (type === 'refinery') {
-    // ===== REFINERY (2x2 = 80x80): Spice processing — large dome tank,
-    // pipes, valves, spice stain, windows =====
+    // ===== REFINERY (2x2 = 80x80): Spice processing plant =====
+    // Large cylindrical processing tank with orange glow + pipes + vats + valves
 
-    // lower processing structure
-    const wallTop = H * 0.5
+    // --- Lower processing structure (industrial chemical plant base) ---
+    const wallTop = H * 0.52
     const wallBottom = H - 4
-    rrect(ctx, 4, wallTop, W - 8, wallBottom - wallTop, 3, col.dark)
+    rrect(ctx, 4, wallTop, W - 8, wallBottom - wallTop, 2, '#1a1a1a')
     const wallGrad = ctx.createLinearGradient(0, wallTop, 0, wallBottom)
-    wallGrad.addColorStop(0, col.light)
-    wallGrad.addColorStop(0.5, col.primary)
-    wallGrad.addColorStop(1, col.dark)
-    rrect(ctx, 6, wallTop + 2, W - 12, wallBottom - wallTop - 4, 2, wallGrad as any)
-    // faction stripe
-    px(ctx, 6, wallTop + 8, W - 12, 2, col.light)
-    px(ctx, 6, wallTop + 10, W - 12, 1, col.trim)
+    wallGrad.addColorStop(0, '#5a5a5a')
+    wallGrad.addColorStop(0.4, '#3a3a3a')
+    wallGrad.addColorStop(1, '#2a2a2a')
+    rrect(ctx, 6, wallTop + 1, W - 12, wallBottom - wallTop - 2, 1, wallGrad as any)
+    px(ctx, 6, wallTop + 1, W - 12, 1, '#7a7a7a')
+    // panel divisions
+    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.4, W - 12, 1, '#1a1a1a')
+    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.4 + 1, W - 12, 1, '#5a5a5a')
+    // faction accent stripe (subtle)
+    px(ctx, 6, wallTop + 6, W - 12, 1, col.primary)
+    px(ctx, 6, wallTop + 7, W - 12, 1, col.dark)
 
-    // large dome tank (central, sitting on top of structure)
-    const domeR = W * 0.32
-    const domeX = W / 2
-    const domeY = wallTop + 2  // base of dome
-    // tank base ring (cylinder section)
-    rrect(ctx, domeX - domeR, domeY - domeR * 0.35, domeR * 2, domeR * 0.35, 2, '#5a5a5a')
-    const tankGrad = ctx.createLinearGradient(0, domeY - domeR * 0.35, 0, domeY)
-    tankGrad.addColorStop(0, '#7a7a7a')
-    tankGrad.addColorStop(1, '#3a3a3a')
-    rrect(ctx, domeX - domeR + 1, domeY - domeR * 0.35 + 1, domeR * 2 - 2, domeR * 0.35 - 2, 1, tankGrad as any)
-    // tank band rivets
-    for (let i = 0; i < 6; i++) {
-      const rx = domeX - domeR + 4 + i * (domeR * 2 - 8) / 5
-      px(ctx, rx, domeY - domeR * 0.18, 1, 1, '#2a2a2a')
+    // --- Large central cylindrical processing tank (with spice glow) ---
+    const tankR = W * 0.18
+    const tankX = W / 2
+    const tankBottomY = wallTop + 2
+    const tankTopY = H * 0.18
+    const tankH = tankBottomY - tankTopY
+    // tank outer shell (dark)
+    rrect(ctx, tankX - tankR, tankTopY, tankR * 2, tankH, 2, '#1a1a1a')
+    // tank metallic body with horizontal gradient
+    const tankGrad = ctx.createLinearGradient(tankX - tankR, 0, tankX + tankR, 0)
+    tankGrad.addColorStop(0, '#2a2a2a')
+    tankGrad.addColorStop(0.25, '#5a5a5a')
+    tankGrad.addColorStop(0.5, '#6a6a6a')
+    tankGrad.addColorStop(0.75, '#4a4a4a')
+    tankGrad.addColorStop(1, '#1a1a1a')
+    rrect(ctx, tankX - tankR + 1, tankTopY + 1, tankR * 2 - 2, tankH - 2, 1, tankGrad as any)
+    // tank top rim (reinforced)
+    rrect(ctx, tankX - tankR - 2, tankTopY - 3, tankR * 2 + 4, 5, 1, '#1a1a1a')
+    rrect(ctx, tankX - tankR - 1, tankTopY - 2, tankR * 2 + 2, 3, 1, '#5a5a5a')
+    px(ctx, tankX - tankR - 1, tankTopY - 2, tankR * 2 + 2, 1, '#8a8a8a')
+    // tank band rivets (reinforcement rings)
+    for (const ry of [tankTopY + tankH * 0.3, tankTopY + tankH * 0.6]) {
+      px(ctx, tankX - tankR, ry, tankR * 2, 1, '#1a1a1a')
+      px(ctx, tankX - tankR, ry + 1, tankR * 2, 1, '#5a5a5a')
+      for (let i = 0; i < 5; i++) {
+        const rx = tankX - tankR + 3 + i * (tankR * 2 - 6) / 4
+        px(ctx, rx, ry + 1, 1, 1, '#1a1a1a')
+      }
     }
-    // dome top (hemisphere)
-    ctx.fillStyle = '#6a6a6a'
-    ctx.beginPath()
-    ctx.arc(domeX, domeY - domeR * 0.35, domeR, Math.PI, 0)
-    ctx.closePath()
-    ctx.fill()
-    const domeGrad = ctx.createRadialGradient(domeX - domeR * 0.3, domeY - domeR * 0.35 - domeR * 0.5, 1, domeX, domeY - domeR * 0.35, domeR)
-    domeGrad.addColorStop(0, '#b0b0b0')
-    domeGrad.addColorStop(0.5, '#7a7a7a')
-    domeGrad.addColorStop(1, '#4a4a4a')
-    ctx.fillStyle = domeGrad
-    ctx.beginPath()
-    ctx.arc(domeX, domeY - domeR * 0.35, domeR, Math.PI, 0)
-    ctx.closePath()
-    ctx.fill()
-    // dome horizontal band lines
-    ctx.strokeStyle = '#3a3a3a'; ctx.lineWidth = 1
-    ctx.beginPath(); ctx.arc(domeX, domeY - domeR * 0.35, domeR * 0.7, Math.PI, 0); ctx.stroke()
-    ctx.beginPath(); ctx.arc(domeX, domeY - domeR * 0.35, domeR * 0.4, Math.PI, 0); ctx.stroke()
-    // dome vertical seams
-    for (const a of [Math.PI * 1.25, Math.PI * 1.5, Math.PI * 1.75]) {
-      ctx.beginPath()
-      ctx.moveTo(domeX, domeY - domeR * 0.35)
-      ctx.lineTo(domeX + Math.cos(a) * domeR, domeY - domeR * 0.35 + Math.sin(a) * domeR)
-      ctx.stroke()
-    }
-    // dome top valve/outlet
-    px(ctx, domeX - 3, domeY - domeR * 0.35 - domeR - 2, 6, 4, '#5a5a5a')
-    px(ctx, domeX - 4, domeY - domeR * 0.35 - domeR - 1, 8, 1, '#3a3a3a')
-    px(ctx, domeX - 2, domeY - domeR * 0.35 - domeR - 4, 4, 2, '#7a7a7a')
-    // valve indicator light (faction color)
-    ctx.fillStyle = col.flag
-    ctx.beginPath(); ctx.arc(domeX, domeY - domeR * 0.35 - domeR - 5, 1.2, 0, Math.PI * 2); ctx.fill()
-    ctx.fillStyle = col.trim
-    ctx.beginPath(); ctx.arc(domeX, domeY - domeR * 0.35 - domeR - 5, 0.5, 0, Math.PI * 2); ctx.fill()
 
-    // side pipes (left and right, connecting tank to structure)
-    ctx.strokeStyle = '#6a6a6a'; ctx.lineWidth = 3
-    // left pipe route
+    // --- Spice glow viewports (translucent orange windows) ---
+    for (const vy of [tankTopY + tankH * 0.45, tankTopY + tankH * 0.75]) {
+      const vpGrad = ctx.createLinearGradient(0, vy, 0, vy + 6)
+      vpGrad.addColorStop(0, '#ff8030')
+      vpGrad.addColorStop(0.5, '#ffa050')
+      vpGrad.addColorStop(1, '#ff6020')
+      rrect(ctx, tankX - tankR * 0.55, vy, tankR * 1.1, 6, 1, '#1a1a1a')
+      rrect(ctx, tankX - tankR * 0.55 + 1, vy + 1, tankR * 1.1 - 2, 4, 1, vpGrad as any)
+      px(ctx, tankX - tankR * 0.55 + 1, vy + 1, tankR * 1.1 - 2, 1, '#ffc070')
+      // viewport dividers
+      for (let i = 1; i < 3; i++) {
+        px(ctx, tankX - tankR * 0.55 + (tankR * 1.1 - 2) * i / 3, vy + 1, 1, 4, '#1a1a1a')
+      }
+    }
+    // spice glow halo (around tank top)
+    const spiceGlow = ctx.createRadialGradient(tankX, tankTopY + 4, 0, tankX, tankTopY + 4, tankR + 4)
+    spiceGlow.addColorStop(0, 'rgba(255,128,48,0.4)')
+    spiceGlow.addColorStop(1, 'rgba(255,128,48,0)')
+    ctx.fillStyle = spiceGlow
+    ctx.fillRect(tankX - tankR - 4, tankTopY - 4, tankR * 2 + 8, 16)
+
+    // --- Tank top valve/outlet assembly ---
+    rrect(ctx, tankX - 4, tankTopY - 7, 8, 4, 1, '#1a1a1a')
+    rrect(ctx, tankX - 3, tankTopY - 6, 6, 2, 1, '#5a5a5a')
+    px(ctx, tankX - 3, tankTopY - 6, 6, 1, '#7a7a7a')
+    // outlet pipe (rising)
+    px(ctx, tankX - 1, tankTopY - 12, 2, 6, '#3a3a3a')
+    px(ctx, tankX - 1, tankTopY - 12, 1, 6, '#5a5a5a')
+    // top vent glow (spice fumes — orange)
+    const ventGrad = ctx.createRadialGradient(tankX, tankTopY - 12, 0, tankX, tankTopY - 12, 5)
+    ventGrad.addColorStop(0, '#ffc070')
+    ventGrad.addColorStop(0.4, '#ff8030')
+    ventGrad.addColorStop(1, 'rgba(255,128,48,0)')
+    ctx.fillStyle = ventGrad
+    ctx.fillRect(tankX - 5, tankTopY - 17, 10, 10)
+
+    // --- Side crystallization vats (smaller cylinders, with spice glow) ---
+    const vatTopY = tankTopY + tankH * 0.15
+    const vatH = tankH * 0.7
+    for (const side of [0, 1]) {
+      const vx = side === 0 ? 8 : W - 18
+      rrect(ctx, vx, vatTopY, 10, vatH, 1, '#1a1a1a')
+      const vatGrad = ctx.createLinearGradient(vx, 0, vx + 10, 0)
+      vatGrad.addColorStop(0, '#3a3a3a')
+      vatGrad.addColorStop(0.5, '#5a5a5a')
+      vatGrad.addColorStop(1, '#1a1a1a')
+      rrect(ctx, vx + 1, vatTopY + 1, 8, vatH - 2, 1, vatGrad as any)
+      // vat spice glow viewport
+      const vsg = ctx.createLinearGradient(0, vatTopY + vatH * 0.3, 0, vatTopY + vatH * 0.7)
+      vsg.addColorStop(0, '#ff6020')
+      vsg.addColorStop(1, '#ffa050')
+      rrect(ctx, vx + 2, vatTopY + vatH * 0.3, 6, vatH * 0.4, 1, vsg as any)
+      px(ctx, vx + 2, vatTopY + vatH * 0.3, 6, 1, '#ffc070')
+      // vat top rim
+      rrect(ctx, vx - 1, vatTopY - 1, 12, 3, 1, '#1a1a1a')
+      px(ctx, vx - 1, vatTopY - 1, 12, 1, '#5a5a5a')
+    }
+
+    // --- Connecting pipes (from main tank to vats) ---
+    ctx.strokeStyle = '#3a3a3a'; ctx.lineWidth = 3
+    // left pipe
     ctx.beginPath()
-    ctx.moveTo(8, H * 0.7)
-    ctx.lineTo(22, H * 0.7)
-    ctx.lineTo(22, domeY - domeR * 0.2)
-    ctx.lineTo(domeX - domeR, domeY - domeR * 0.2)
+    ctx.moveTo(tankX - tankR, tankTopY + tankH * 0.5)
+    ctx.lineTo(18, tankTopY + tankH * 0.5)
     ctx.stroke()
-    // right pipe route
+    // right pipe
     ctx.beginPath()
-    ctx.moveTo(W - 8, H * 0.7)
-    ctx.lineTo(W - 22, H * 0.7)
-    ctx.lineTo(W - 22, domeY - domeR * 0.2)
-    ctx.lineTo(domeX + domeR, domeY - domeR * 0.2)
+    ctx.moveTo(tankX + tankR, tankTopY + tankH * 0.5)
+    ctx.lineTo(W - 18, tankTopY + tankH * 0.5)
     ctx.stroke()
     // pipe highlights
-    ctx.strokeStyle = '#9a9a9a'; ctx.lineWidth = 1
+    ctx.strokeStyle = '#6a6a6a'; ctx.lineWidth = 1
     ctx.beginPath()
-    ctx.moveTo(8, H * 0.7 - 1); ctx.lineTo(22, H * 0.7 - 1)
-    ctx.moveTo(W - 8, H * 0.7 - 1); ctx.lineTo(W - 22, H * 0.7 - 1)
+    ctx.moveTo(tankX - tankR, tankTopY + tankH * 0.5 - 1)
+    ctx.lineTo(18, tankTopY + tankH * 0.5 - 1)
+    ctx.moveTo(tankX + tankR, tankTopY + tankH * 0.5 - 1)
+    ctx.lineTo(W - 18, tankTopY + tankH * 0.5 - 1)
     ctx.stroke()
-    // pipe joints (elbows)
-    for (const jx of [22, W - 22]) {
-      rrect(ctx, jx - 2, H * 0.7 - 3, 4, 6, 1, '#8a8a8a')
-      px(ctx, jx - 2, H * 0.7 - 3, 4, 1, '#a0a0a0')
+    // pipe elbows (flanges)
+    for (const jx of [18, W - 18]) {
+      rrect(ctx, jx - 2, tankTopY + tankH * 0.5 - 3, 4, 6, 1, '#5a5a5a')
+      px(ctx, jx - 2, tankTopY + tankH * 0.5 - 3, 4, 1, '#8a8a8a')
     }
 
-    // valve wheels (large, on either side)
+    // --- Valve array (2 large wheels on lower structure) ---
     for (const vx of [14, W - 14]) {
       const vy = H * 0.78
-      ctx.fillStyle = '#8a8a8a'
+      ctx.fillStyle = '#3a3a3a'
       ctx.beginPath(); ctx.arc(vx, vy, 5, 0, Math.PI * 2); ctx.fill()
-      // wheel spokes
-      ctx.strokeStyle = '#3a3a3a'; ctx.lineWidth = 1
+      ctx.fillStyle = '#5a5a5a'
+      ctx.beginPath(); ctx.arc(vx, vy, 4, 0, Math.PI * 2); ctx.fill()
+      ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1
       for (let i = 0; i < 4; i++) {
         const a = (i / 4) * Math.PI * 2
         ctx.beginPath()
         ctx.moveTo(vx, vy)
-        ctx.lineTo(vx + Math.cos(a) * 5, vy + Math.sin(a) * 5)
+        ctx.lineTo(vx + Math.cos(a) * 4, vy + Math.sin(a) * 4)
         ctx.stroke()
       }
-      px(ctx, vx - 5, vy, 11, 1, '#5a5a5a')
-      px(ctx, vx, vy - 5, 1, 11, '#5a5a5a')
-      // hub
-      ctx.fillStyle = '#a0a0a0'
+      ctx.fillStyle = '#1a1a1a'
       ctx.beginPath(); ctx.arc(vx, vy, 1.5, 0, Math.PI * 2); ctx.fill()
+      // valve center glow (spice)
+      ctx.fillStyle = '#ff8030'
+      ctx.beginPath(); ctx.arc(vx, vy, 0.8, 0, Math.PI * 2); ctx.fill()
     }
 
-    // windows on lower structure
+    // --- Spice glow windows on lower structure ---
     for (const wx of [12, W - 16]) {
-      rrect(ctx, wx, H * 0.62, 6, 6, 1, '#ffd060')
-      px(ctx, wx, H * 0.62, 6, 1, '#fff8c0')
-      px(ctx, wx + 2, H * 0.62, 1, 6, col.dark)
-      px(ctx, wx - 1, H * 0.62 - 1, 8, 1, col.dark)
+      const sg = ctx.createLinearGradient(0, H * 0.62, 0, H * 0.7)
+      sg.addColorStop(0, '#ff6020')
+      sg.addColorStop(1, '#ffa050')
+      rrect(ctx, wx, H * 0.62, 6, 8, 1, '#1a1a1a')
+      rrect(ctx, wx + 1, H * 0.62 + 1, 4, 6, 1, sg as any)
+      px(ctx, wx + 1, H * 0.62 + 1, 4, 1, '#ffc070')
     }
 
-    // central access door
-    rrect(ctx, W / 2 - 4, H - 12, 8, 9, 2, '#1a1208')
-    px(ctx, W / 2 - 4, H - 12, 8, 1, col.trim)
-    px(ctx, W / 2, H - 12, 1, 9, col.dark)
-    px(ctx, W / 2 - 2, H - 8, 1, 1, col.flag)
+    // --- Central access door ---
+    rrect(ctx, W / 2 - 5, H - 13, 10, 10, 1, '#1a1a1a')
+    const dGrad = ctx.createLinearGradient(0, H - 13, 0, H - 3)
+    dGrad.addColorStop(0, '#4a4a4a')
+    dGrad.addColorStop(1, '#1a1a1a')
+    rrect(ctx, W / 2 - 4, H - 12, 8, 9, 1, dGrad as any)
+    px(ctx, W / 2, H - 12, 1, 9, '#0a0a0a')
+    // hazard stripes at door base
+    for (let i = 0; i < 4; i++) {
+      px(ctx, W / 2 - 4 + i * 2, H - 4, 2, 1, i % 2 === 0 ? '#ffd040' : '#1a1a1a')
+    }
 
-    // spice stain (orange spill on ground in front of structure)
-    ctx.fillStyle = 'rgba(232, 93, 47, 0.55)'
-    ctx.beginPath(); ctx.ellipse(W / 2 + 10, H - 3, 9, 2.5, 0, 0, Math.PI * 2); ctx.fill()
-    ctx.fillStyle = 'rgba(255, 150, 80, 0.45)'
-    ctx.beginPath(); ctx.ellipse(W / 2 + 8, H - 3, 5, 1.5, 0, 0, Math.PI * 2); ctx.fill()
-    // spice crystal specks
-    for (let i = 0; i < 5; i++) {
-      const sx2 = W / 2 + 4 + rng() * 14
+    // --- Spice stain spill (orange on ground) ---
+    ctx.fillStyle = 'rgba(232, 93, 47, 0.5)'
+    ctx.beginPath(); ctx.ellipse(W / 2 + 12, H - 3, 10, 2.5, 0, 0, Math.PI * 2); ctx.fill()
+    ctx.fillStyle = 'rgba(255, 150, 80, 0.4)'
+    ctx.beginPath(); ctx.ellipse(W / 2 + 10, H - 3, 5, 1.5, 0, 0, Math.PI * 2); ctx.fill()
+    // spice crystal specks (glowing)
+    for (let i = 0; i < 6; i++) {
+      const sx2 = W / 2 + 6 + rng() * 14
       const sy2 = H - 4 + rng() * 2
-      ctx.fillStyle = rng() > 0.5 ? '#e85d2f' : '#ff9060'
+      ctx.fillStyle = rng() > 0.5 ? '#ff8030' : '#ffc070'
       ctx.fillRect(sx2, sy2, 1, 1)
     }
   } else if (type === 'generator') {
-    // ===== GENERATOR (2x2 = 80x80): Power plant — glowing energy core,
-    // cooling fins, lightning arcs, vents, power conduits =====
+    // ===== GENERATOR (2x2 = 80x80): Power plant with vertical plasma core =====
+    // Bright cyan plasma + cooling fins + lightning arcs + energy conduit
 
-    // base platform / housing
-    const wallTop = H * 0.42
+    // --- Main reactor housing ---
+    const wallTop = H * 0.4
     const wallBottom = H - 4
-    rrect(ctx, 4, wallTop, W - 8, wallBottom - wallTop, 3, col.dark)
+    rrect(ctx, 4, wallTop, W - 8, wallBottom - wallTop, 2, '#1a1a1a')
     const wallGrad = ctx.createLinearGradient(0, wallTop, 0, wallBottom)
-    wallGrad.addColorStop(0, col.light)
-    wallGrad.addColorStop(0.5, col.primary)
-    wallGrad.addColorStop(1, col.dark)
-    rrect(ctx, 6, wallTop + 2, W - 12, wallBottom - wallTop - 4, 2, wallGrad as any)
-    px(ctx, 6, wallTop + 2, W - 12, 2, col.light)
+    wallGrad.addColorStop(0, '#5a5a5a')
+    wallGrad.addColorStop(0.4, '#3a3a3a')
+    wallGrad.addColorStop(1, '#2a2a2a')
+    rrect(ctx, 6, wallTop + 1, W - 12, wallBottom - wallTop - 2, 1, wallGrad as any)
+    px(ctx, 6, wallTop + 1, W - 12, 1, '#7a7a7a')
+    // panel divisions
+    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.55, W - 12, 1, '#1a1a1a')
+    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.55 + 1, W - 12, 1, '#5a5a5a')
 
-    // cooling fins (left and right vertical radiator stacks)
+    // --- Vertical cooling fins (left and right radiator stacks) ---
     for (const side of [0, 1]) {
       const fx = side === 0 ? 8 : W - 14
-      rrect(ctx, fx, wallTop + 4, 6, wallBottom - wallTop - 8, 1, col.dark)
+      rrect(ctx, fx, wallTop + 4, 6, wallBottom - wallTop - 8, 1, '#1a1a1a')
       const fGrad = ctx.createLinearGradient(fx, 0, fx + 6, 0)
-      fGrad.addColorStop(0, col.light)
-      fGrad.addColorStop(1, col.dark)
+      fGrad.addColorStop(0, '#3a3a3a')
+      fGrad.addColorStop(0.5, '#5a5a5a')
+      fGrad.addColorStop(1, '#1a1a1a')
       rrect(ctx, fx + 1, wallTop + 5, 4, wallBottom - wallTop - 10, 1, fGrad as any)
-      // fin slits (radiator lines)
-      for (let i = 0; i < 8; i++) {
-        const fy = wallTop + 6 + i * ((wallBottom - wallTop - 12) / 7)
-        px(ctx, fx, fy, 6, 1, col.dark)
+      // fin slits (vertical radiator lines)
+      for (let i = 0; i < 10; i++) {
+        const fy = wallTop + 6 + i * ((wallBottom - wallTop - 14) / 9)
+        px(ctx, fx, fy, 6, 1, '#1a1a1a')
+        px(ctx, fx, fy + 1, 6, 1, '#4a4a4a')
       }
-      // top cap
-      px(ctx, fx, wallTop + 4, 6, 1, col.trim)
-      // top vent glow
-      ctx.fillStyle = '#ffd060'
-      ctx.beginPath(); ctx.arc(fx + 3, wallTop + 4, 1, 0, Math.PI * 2); ctx.fill()
+      // top cap (with vent glow)
+      rrect(ctx, fx - 1, wallTop + 1, 8, 4, 1, '#1a1a1a')
+      rrect(ctx, fx, wallTop + 2, 6, 2, 1, '#4a4a4a')
+      // top vent glow (cyan heat exhaust)
+      const vg = ctx.createRadialGradient(fx + 3, wallTop + 1, 0, fx + 3, wallTop + 1, 4)
+      vg.addColorStop(0, '#c0f4ff')
+      vg.addColorStop(0.4, '#00d0ff')
+      vg.addColorStop(1, 'rgba(0,208,255,0)')
+      ctx.fillStyle = vg
+      ctx.fillRect(fx - 1, wallTop - 3, 8, 6)
+      ctx.fillStyle = '#00d0ff'
+      ctx.beginPath(); ctx.arc(fx + 3, wallTop + 1, 0.8, 0, Math.PI * 2); ctx.fill()
     }
 
-    // top vent assembly (horizontal slats)
-    rrect(ctx, W * 0.22, wallTop - 4, W * 0.56, 6, 1, col.dark)
-    px(ctx, W * 0.22, wallTop - 4, W * 0.56, 1, col.trim)
-    for (let i = 0; i < 6; i++) {
-      const vx = W * 0.22 + 2 + i * ((W * 0.56 - 4) / 6)
-      px(ctx, vx, wallTop - 3, 5, 1, col.light)
-      px(ctx, vx, wallTop - 1, 5, 1, col.dark)
+    // --- Top vent assembly (horizontal slats) ---
+    rrect(ctx, W * 0.22, wallTop - 4, W * 0.56, 6, 1, '#1a1a1a')
+    rrect(ctx, W * 0.22 + 1, wallTop - 3, W * 0.56 - 2, 4, 1, '#4a4a4a')
+    px(ctx, W * 0.22 + 1, wallTop - 3, W * 0.56 - 2, 1, '#6a6a6a')
+    for (let i = 0; i < 7; i++) {
+      const vx = W * 0.22 + 2 + i * ((W * 0.56 - 4) / 7)
+      px(ctx, vx, wallTop - 2, 4, 1, '#2a2a2a')
+      px(ctx, vx, wallTop, 4, 1, '#5a5a5a')
     }
 
-    // central power core (large glowing radial gradient)
+    // --- Central vertical plasma core (bright cyan glow through containment) ---
     const coreX = W / 2
-    const coreY = wallTop + (wallBottom - wallTop) * 0.55
-    const coreR = W * 0.22
-    const coreGrad = ctx.createRadialGradient(coreX, coreY, 1, coreX, coreY, coreR + 8)
-    coreGrad.addColorStop(0, '#fff8a0')
-    coreGrad.addColorStop(0.15, '#ffe060')
-    coreGrad.addColorStop(0.4, '#ff9020')
-    coreGrad.addColorStop(0.7, 'rgba(255,144,32,0.6)')
-    coreGrad.addColorStop(1, 'rgba(255,144,32,0)')
-    ctx.fillStyle = coreGrad
-    ctx.fillRect(coreX - coreR - 8, coreY - coreR - 8, (coreR + 8) * 2, (coreR + 8) * 2)
+    const coreY = wallTop + (wallBottom - wallTop) * 0.5
+    const coreR = W * 0.2
 
-    // core containment ring (mechanical housing around the glow)
-    ctx.strokeStyle = col.dark; ctx.lineWidth = 3
+    // outer plasma halo (large soft glow)
+    const haloGrad = ctx.createRadialGradient(coreX, coreY, 0, coreX, coreY, coreR + 12)
+    haloGrad.addColorStop(0, 'rgba(0,208,255,0.7)')
+    haloGrad.addColorStop(0.5, 'rgba(0,128,160,0.4)')
+    haloGrad.addColorStop(1, 'rgba(0,128,160,0)')
+    ctx.fillStyle = haloGrad
+    ctx.fillRect(coreX - coreR - 12, coreY - coreR - 12, (coreR + 12) * 2, (coreR + 12) * 2)
+
+    // core containment ring (mechanical housing)
+    ctx.fillStyle = '#1a1a1a'
+    ctx.beginPath(); ctx.arc(coreX, coreY, coreR * 0.9, 0, Math.PI * 2); ctx.fill()
+    ctx.strokeStyle = '#5a5a5a'; ctx.lineWidth = 3
     ctx.beginPath(); ctx.arc(coreX, coreY, coreR * 0.85, 0, Math.PI * 2); ctx.stroke()
-    ctx.strokeStyle = col.trim; ctx.lineWidth = 1
+    ctx.strokeStyle = '#7a7a7a'; ctx.lineWidth = 1
     ctx.beginPath(); ctx.arc(coreX, coreY, coreR * 0.85, 0, Math.PI * 2); ctx.stroke()
-    // ring bolt mounts
+    // ring bolt mounts (8 around)
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2
       const bx = coreX + Math.cos(a) * coreR * 0.85
       const by = coreY + Math.sin(a) * coreR * 0.85
-      ctx.fillStyle = '#5a5a5a'
-      ctx.beginPath(); ctx.arc(bx, by, 1.5, 0, Math.PI * 2); ctx.fill()
-      px(ctx, bx, by, 1, 1, col.dark)
+      ctx.fillStyle = '#3a3a3a'
+      ctx.beginPath(); ctx.arc(bx, by, 2, 0, Math.PI * 2); ctx.fill()
+      px(ctx, bx, by, 1, 1, '#1a1a1a')
     }
 
-    // core inner (bright plasma)
-    const innerGrad = ctx.createRadialGradient(coreX, coreY, 0, coreX, coreY, coreR * 0.5)
-    innerGrad.addColorStop(0, '#ffffff')
-    innerGrad.addColorStop(0.4, '#fff8a0')
-    innerGrad.addColorStop(1, 'rgba(255,224,96,0)')
-    ctx.fillStyle = innerGrad
-    ctx.beginPath(); ctx.arc(coreX, coreY, coreR * 0.5, 0, Math.PI * 2); ctx.fill()
+    // core plasma (bright cyan radial gradient)
+    const plasmaGrad = ctx.createRadialGradient(coreX, coreY, 0, coreX, coreY, coreR * 0.7)
+    plasmaGrad.addColorStop(0, '#ffffff')
+    plasmaGrad.addColorStop(0.2, '#c0f4ff')
+    plasmaGrad.addColorStop(0.5, '#00d0ff')
+    plasmaGrad.addColorStop(0.85, '#0080a0')
+    plasmaGrad.addColorStop(1, 'rgba(0,128,160,0)')
+    ctx.fillStyle = plasmaGrad
+    ctx.beginPath(); ctx.arc(coreX, coreY, coreR * 0.7, 0, Math.PI * 2); ctx.fill()
+    // plasma bright center
     ctx.fillStyle = '#ffffff'
     ctx.beginPath(); ctx.arc(coreX, coreY, coreR * 0.18, 0, Math.PI * 2); ctx.fill()
 
-    // energy arcs (lightning bolts radiating from core)
-    ctx.strokeStyle = '#fff8a0'; ctx.lineWidth = 1.5
+    // containment vertical bars (cyan grid over plasma)
+    ctx.strokeStyle = 'rgba(0,208,255,0.6)'; ctx.lineWidth = 1
+    for (let i = -2; i <= 2; i++) {
+      const cx2 = coreX + i * (coreR * 0.7 / 2.5)
+      const dy = Math.sqrt(Math.max(0, (coreR * 0.7) ** 2 - (cx2 - coreX) ** 2))
+      ctx.beginPath()
+      ctx.moveTo(cx2, coreY - dy)
+      ctx.lineTo(cx2, coreY + dy)
+      ctx.stroke()
+    }
+
+    // --- Lightning arcs (4 directions from core, cyan) ---
+    ctx.strokeStyle = '#c0f4ff'; ctx.lineWidth = 1.5
     ctx.lineCap = 'round'
     // top arc to pylon
     ctx.beginPath()
     ctx.moveTo(coreX, coreY - coreR * 0.85)
-    ctx.lineTo(coreX - 3, coreY - coreR * 1.0)
-    ctx.lineTo(coreX + 2, coreY - coreR * 1.15)
-    ctx.lineTo(coreX - 1, coreY - coreR * 1.3)
+    ctx.lineTo(coreX - 3, coreY - coreR * 1.05)
+    ctx.lineTo(coreX + 2, coreY - coreR * 1.2)
+    ctx.lineTo(coreX - 1, coreY - coreR * 1.35)
     ctx.stroke()
     // left arc
     ctx.beginPath()
     ctx.moveTo(coreX - coreR * 0.85, coreY)
-    ctx.lineTo(coreX - coreR * 1.0, coreY - 3)
-    ctx.lineTo(coreX - coreR * 1.15, coreY + 2)
-    ctx.lineTo(coreX - coreR * 1.25, coreY - 1)
+    ctx.lineTo(coreX - coreR * 1.05, coreY - 3)
+    ctx.lineTo(coreX - coreR * 1.2, coreY + 2)
+    ctx.lineTo(coreX - coreR * 1.3, coreY - 1)
     ctx.stroke()
     // right arc
     ctx.beginPath()
     ctx.moveTo(coreX + coreR * 0.85, coreY)
-    ctx.lineTo(coreX + coreR * 1.0, coreY + 3)
-    ctx.lineTo(coreX + coreR * 1.15, coreY - 2)
-    ctx.lineTo(coreX + coreR * 1.25, coreY + 1)
+    ctx.lineTo(coreX + coreR * 1.05, coreY + 3)
+    ctx.lineTo(coreX + coreR * 1.2, coreY - 2)
+    ctx.lineTo(coreX + coreR * 1.3, coreY + 1)
     ctx.stroke()
     // bottom arc
     ctx.beginPath()
     ctx.moveTo(coreX, coreY + coreR * 0.85)
     ctx.lineTo(coreX + 3, coreY + coreR * 1.0)
-    ctx.lineTo(coreX - 2, coreY + coreR * 1.1)
+    ctx.lineTo(coreX - 2, coreY + coreR * 1.15)
     ctx.stroke()
     ctx.lineCap = 'butt'
 
-    // energy pylon / antenna (top, conducting power up)
-    px(ctx, coreX - 1, H * 0.08, 2, wallTop - H * 0.08 - 4, '#5a5a5a')
-    px(ctx, coreX - 3, H * 0.1, 6, 1, '#5a5a5a')
-    px(ctx, coreX - 3, H * 0.14, 6, 1, '#5a5a5a')
+    // --- Energy pylon / antenna (top, conducting power up) ---
+    const pylonX = coreX
+    const pylonTopY = H * 0.05
+    px(ctx, pylonX - 1, pylonTopY, 2, wallTop - 4 - pylonTopY, '#3a3a3a')
+    px(ctx, pylonX - 1, pylonTopY, 1, wallTop - 4 - pylonTopY, '#5a5a5a')
+    // pylon crossbars
+    px(ctx, pylonX - 3, pylonTopY + 6, 6, 1, '#4a4a4a')
+    px(ctx, pylonX - 2, pylonTopY + 12, 4, 1, '#4a4a4a')
     // pylon ceramic insulators
-    for (const iy of [H * 0.12, H * 0.16, H * 0.2]) {
-      rrect(ctx, coreX - 2, iy, 4, 2, 1, '#d0d0d0')
-      px(ctx, coreX - 2, iy, 4, 1, '#fff')
+    for (const iy of [pylonTopY + 8, pylonTopY + 14, pylonTopY + 20]) {
+      rrect(ctx, pylonX - 2, iy, 4, 2, 1, '#d0d0d0')
+      px(ctx, pylonX - 2, iy, 4, 1, '#ffffff')
     }
-    // pylon tip glow (charging)
-    ctx.fillStyle = '#ffe060'
-    ctx.beginPath(); ctx.arc(coreX, H * 0.07, 2.5, 0, Math.PI * 2); ctx.fill()
-    ctx.fillStyle = '#fff8a0'
-    ctx.beginPath(); ctx.arc(coreX, H * 0.07, 1, 0, Math.PI * 2); ctx.fill()
+    // pylon tip glow (cyan, charging)
+    const tipGrad = ctx.createRadialGradient(pylonX, pylonTopY, 0, pylonX, pylonTopY, 6)
+    tipGrad.addColorStop(0, '#c0f4ff')
+    tipGrad.addColorStop(0.4, '#00d0ff')
+    tipGrad.addColorStop(1, 'rgba(0,208,255,0)')
+    ctx.fillStyle = tipGrad
+    ctx.fillRect(pylonX - 6, pylonTopY - 6, 12, 12)
+    ctx.fillStyle = '#ffffff'
+    ctx.beginPath(); ctx.arc(pylonX, pylonTopY, 1.5, 0, Math.PI * 2); ctx.fill()
 
-    // power conduit lights (small LEDs along the bottom)
+    // --- Energy conduit LEDs along the bottom (cyan) ---
     for (let i = 0; i < 5; i++) {
-      const lx = 20 + i * (W - 40) / 4
-      ctx.fillStyle = '#ffd060'
-      ctx.beginPath(); ctx.arc(lx, H - 7, 1.8, 0, Math.PI * 2); ctx.fill()
-      ctx.fillStyle = '#fff8c0'
-      ctx.beginPath(); ctx.arc(lx, H - 7, 0.7, 0, Math.PI * 2); ctx.fill()
+      const lx = 22 + i * (W - 44) / 4
+      const lg = ctx.createRadialGradient(lx, H - 7, 0, lx, H - 7, 3)
+      lg.addColorStop(0, '#c0f4ff')
+      lg.addColorStop(0.4, '#00d0ff')
+      lg.addColorStop(1, 'rgba(0,208,255,0)')
+      ctx.fillStyle = lg
+      ctx.fillRect(lx - 3, H - 10, 6, 6)
+      ctx.fillStyle = '#00d0ff'
+      ctx.beginPath(); ctx.arc(lx, H - 7, 1.2, 0, Math.PI * 2); ctx.fill()
+      ctx.fillStyle = '#ffffff'
+      ctx.beginPath(); ctx.arc(lx, H - 7, 0.4, 0, Math.PI * 2); ctx.fill()
     }
 
-    // small status display panel
-    rrect(ctx, 16, wallTop + 10, 8, 5, 1, '#1a1a1a')
-    px(ctx, 17, wallTop + 11, 6, 1, '#22c55e')
-    px(ctx, 17, wallTop + 13, 4, 1, '#22c55e')
-    rrect(ctx, W - 24, wallTop + 10, 8, 5, 1, '#1a1a1a')
-    px(ctx, W - 23, wallTop + 11, 6, 1, '#22c55e')
-    px(ctx, W - 23, wallTop + 13, 4, 1, '#eab308')
+    // --- Status display panels (glowing cyan/amber) ---
+    rrect(ctx, 16, wallTop + 8, 8, 5, 1, '#1a1a1a')
+    px(ctx, 17, wallTop + 9, 6, 1, '#00d0ff')
+    px(ctx, 17, wallTop + 11, 4, 1, '#00d0ff')
+    rrect(ctx, W - 24, wallTop + 8, 8, 5, 1, '#1a1a1a')
+    px(ctx, W - 23, wallTop + 9, 6, 1, '#00d0ff')
+    px(ctx, W - 23, wallTop + 11, 4, 1, '#ffaa30')
+
+    // --- Faction accent stripe ---
+    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.85, W - 12, 1, col.primary)
+    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.85 + 1, W - 12, 1, col.dark)
 
     // base shadow strip
     ctx.fillStyle = 'rgba(0,0,0,0.3)'
@@ -1509,10 +1755,20 @@ function renderUnit(type: UnitType, faction: Faction): HTMLCanvasElement {
   return c
 }
 
-export function drawUnit(ctx: CanvasRenderingContext2D, type: UnitType, faction: Faction, px_: number, py_: number, bob = 0) {
+export function drawUnit(ctx: CanvasRenderingContext2D, type: UnitType, faction: Faction, px_: number, py_: number, bob = 0, facing = 0) {
   const img = renderUnit(type, faction)
-  // bob: slight vertical offset for motion feel
-  ctx.drawImage(img, px_ - TILE_SIZE / 2, py_ - TILE_SIZE / 2 + bob)
+  if (type === 'soldier') {
+    // soldiers don't rotate (they face the player), just draw with bob
+    ctx.drawImage(img, px_ - TILE_SIZE / 2, py_ - TILE_SIZE / 2 + bob)
+  } else {
+    // vehicles (harvester, tank) rotate to face movement direction
+    ctx.save()
+    ctx.translate(px_, py_ + bob)
+    // sprite is drawn facing right (0 rad). Rotate to facing.
+    ctx.rotate(facing)
+    ctx.drawImage(img, -TILE_SIZE / 2, -TILE_SIZE / 2)
+    ctx.restore()
+  }
 }
 
 // ---------- Worm rendering (detailed, Shai-Hulud) ----------

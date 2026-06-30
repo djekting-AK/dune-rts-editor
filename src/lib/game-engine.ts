@@ -56,6 +56,7 @@ export interface Unit {
   stuckTicks: number // counter to detect being stuck
   lastX: number
   lastY: number
+  facing: number     // angle in radians (0 = right/east) for directional rendering
 }
 
 export interface Worm {
@@ -68,6 +69,7 @@ export interface Worm {
   hp: number
   maxHp: number
   cooldown: number
+  eaten: number  // count of units eaten this spawn (max 2)
 }
 
 export interface Projectile {
@@ -151,8 +153,8 @@ export const CONFIG = {
   generator: { cost: 120, hp: 300, buildTime: 100, energy: 0, energyOutput: 12, w: 2, h: 2 },
   palace:    { cost: 0,   hp: 1500, buildTime: 0, energy: 0, w: 2, h: 2 },
   spiceValue: { 5: 1, 6: 2 },
-  wormInterval: 2200,
-  wormLife: 700,
+  wormInterval: 3500,   // rarer spawns — element of surprise
+  wormLife: 500,
   wormHp: 120,
   wormDmg: 60,
   wormSpeed: 0.025,
@@ -317,6 +319,7 @@ export function makeUnit(s: GameState, type: UnitType, owner: Faction, x: number
     cooldown: 0, harvestTime: 0,
     homeX: x, homeY: y,
     stuckTicks: 0, lastX: x, lastY: y,
+    facing: 0,
   }
 }
 
@@ -381,9 +384,10 @@ export function canBuild(s: GameState, owner: Faction, type: BuildingType, x: nu
   }
   const cost = BUILD_COSTS[type] ?? 0
   if (s.players[owner].credits < cost) return false
-  // must be near an existing friendly building (check from footprint center)
+  // buildings can be placed adjacent to each other (no distance requirement)
+  // just require at least one friendly building within reasonable range OR within 6 tiles of any friendly building
   const cx = x + fp.w / 2, cy = y + fp.h / 2
-  const near = s.buildings.some(b => b.owner === owner && dist(b.x + b.w / 2, b.y + b.h / 2, cx, cy) < 5)
+  const near = s.buildings.some(b => b.owner === owner && dist(b.x + b.w / 2, b.y + b.h / 2, cx, cy) < 6)
   return near
 }
 
@@ -541,18 +545,42 @@ function updateBuildings(s: GameState) {
 }
 
 function findSpawnTile(s: GameState, b: Building): { x: number; y: number } | null {
-  // search around the building footprint
-  const cx = b.x + b.w / 2, cy = b.y + b.h / 2
-  for (let r = 1; r <= 5; r++) {
-    for (let dy = -r; dy <= r + b.h - 1; dy++) {
-      for (let dx = -r; dx <= r + b.w - 1; dx++) {
-        const x = b.x + dx, y = b.y + dy
-        if (!isWalkable(s.terrain, x, y, s.width, s.height)) continue
-        if (tileHasBuilding(s, x, y)) continue
-        if (s.units.some(u => Math.round(u.x) === x && Math.round(u.y) === y)) continue
-        // only spawn on edge of footprint (not inside)
-        return { x: x + 0.5, y: y + 0.5 }
-      }
+  // BFS from building footprint outward — finds nearest free tile even if surrounded
+  const w = s.width, h = s.height
+  const visited = new Uint8Array(w * h)
+  const queue: number[] = []
+  // mark footprint as visited + add adjacent tiles
+  for (let dy = 0; dy < b.h; dy++) {
+    for (let dx = 0; dx < b.w; dx++) {
+      visited[(b.y + dy) * w + (b.x + dx)] = 1
+    }
+  }
+  // seed queue with tiles adjacent to footprint
+  for (let dy = -1; dy <= b.h; dy++) {
+    for (let dx = -1; dx <= b.w; dx++) {
+      const x = b.x + dx, y = b.y + dy
+      if (x < 0 || y < 0 || x >= w || y >= h) continue
+      if (visited[y * w + x]) continue
+      if (isTileFree(s, x, y, -1)) return { x: x + 0.5, y: y + 0.5 }
+      visited[y * w + x] = 1
+      queue.push(y * w + x)
+    }
+  }
+  // BFS up to depth 80
+  const dirs = [[1,0],[-1,0],[0,1],[0,-1]]
+  let depth = 0
+  while (queue.length && depth < 80) {
+    const cur = queue.shift()!
+    depth++
+    const cx = cur % w, cy = Math.floor(cur / w)
+    for (const [dx, dy] of dirs) {
+      const nx = cx + dx, ny = cy + dy
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+      const ni = ny * w + nx
+      if (visited[ni]) continue
+      if (isTileFree(s, nx, ny, -1)) return { x: nx + 0.5, y: ny + 0.5 }
+      visited[ni] = 1
+      queue.push(ni)
     }
   }
   return null
@@ -600,16 +628,19 @@ function findNearestSpice(s: GameState, x: number, y: number, range = 30): { x: 
 }
 
 function findNearestFriendlyBuilding(s: GameState, x: number, y: number, owner: Faction): Building | null {
-  let best: Building | null = null
-  let bestD = 99
+  // Prefer refinery (spice processing), fallback to palace
+  let bestRefinery: Building | null = null
+  let bestRefineryD = 99
+  let bestPalace: Building | null = null
+  let bestPalaceD = 99
   for (const b of s.buildings) {
     if (b.owner !== owner) continue
-    if (b.type !== 'palace' && b.type !== 'refinery') continue
     const cx = b.x + b.w / 2, cy = b.y + b.h / 2
     const d = dist(x, y, cx, cy)
-    if (d < bestD) { bestD = d; best = b }
+    if (b.type === 'refinery' && d < bestRefineryD) { bestRefineryD = d; bestRefinery = b }
+    if (b.type === 'palace' && d < bestPalaceD) { bestPalaceD = d; bestPalace = b }
   }
-  return best
+  return bestRefinery || bestPalace
 }
 
 function updateUnits(s: GameState) {
@@ -659,12 +690,21 @@ function updateUnits(s: GameState) {
         }
       } else if (u.state === 'return') {
         const d = dist(u.x, u.y, u.tx, u.ty)
-        if (d < 1.2) {
-          const credits = u.cargo * 5
+        if (d < 1.5) {
+          // gradual unloading — convert spice to credits over time
+          const unloadRate = 8 // spice per tick
+          const unload = Math.min(u.cargo, unloadRate)
+          const credits = unload * 5
+          u.cargo -= unload
           s.players[u.owner].credits += credits
-          if (u.owner === 'atreides') logEvent(s, 'spice', `+${credits} кредитов (спайс)`)
-          u.cargo = 0
-          u.state = 'idle'
+          if (u.owner === 'atreides' && credits > 0) {
+            // floating text effect via event (throttled)
+            if (s.tick % 4 === 0) logEvent(s, 'spice', `+${credits}$ (переработка)`)
+          }
+          if (u.cargo <= 0) {
+            u.cargo = 0
+            u.state = 'idle'
+          }
         } else {
           moveToward(s, u, u.tx, u.ty, speed)
         }
@@ -858,6 +898,8 @@ function moveToward(s: GameState, u: Unit, tx: number, ty: number, speed: number
   const dx = tx - u.x, dy = ty - u.y
   const d = Math.hypot(dx, dy)
   if (d < 0.05) return
+  // update facing direction toward target
+  u.facing = Math.atan2(dy, dx)
   // If close to target, move directly (smooth final approach)
   if (d < speed * 2) {
     const tr = Math.round(tx), tc = Math.round(ty)
@@ -962,7 +1004,7 @@ function updateWorms(s: GameState) {
         // spawn far from any building
         const nearBld = s.buildings.some(b => dist(b.x, b.y, x, y) < 6)
         if (!nearBld) {
-          s.worms.push({ id: s.nextId++, x: x + 0.5, y: y + 0.5, tx: x + 0.5, ty: y + 0.5, life: CONFIG.wormLife, hp: CONFIG.wormHp, maxHp: CONFIG.wormHp, cooldown: 0 })
+          s.worms.push({ id: s.nextId++, x: x + 0.5, y: y + 0.5, tx: x + 0.5, ty: y + 0.5, life: CONFIG.wormLife, hp: CONFIG.wormHp, maxHp: CONFIG.wormHp, cooldown: 0, eaten: 0 })
           logEvent(s, 'warn', 'Шай-Хулуд пробуждается!')
           break
         }
@@ -1010,11 +1052,17 @@ function updateWorms(s: GameState) {
         else { w.cooldown = 0 } // pick new wander target
       }
     }
-    // eat
-    if (best && dist(w.x, w.y, best.x, best.y) < 0.7) {
+    // eat — max 2 units per spawn, then worm leaves (despawns)
+    if (best && dist(w.x, w.y, best.x, best.y) < 0.7 && w.eaten < 2) {
       best.hp = 0
-      logEvent(s, 'warn', `Червь сожрал ${unitName(best.type)}!`)
+      w.eaten++
+      logEvent(s, 'warn', `Червь сожрал ${unitName(best.type)}! (${w.eaten}/2)`)
       spawnExplosion(s, best.x, best.y, 1.5, '#aa5020')
+      if (w.eaten >= 2) {
+        // worm is satiated — burrows away
+        w.life = 0
+        logEvent(s, 'warn', 'Шай-Хулуд насытился и исчез в песках')
+      }
     }
   }
   s.worms = s.worms.filter(w => w.life > 0 && w.hp > 0)
@@ -1135,7 +1183,7 @@ function tryAIBuild(s: GameState, owner: Faction, type: BuildingType, near: Buil
 // ---------- Russian names ----------
 export function typeRu(t: string): string {
   const m: Record<string,string> = {
-    palace:'Дворец', barracks:'Казармы', factory:'Фабрика', turret:'Турель', refinery:'Нефтезавод', generator:'Генератор',
+    palace:'Дворец', barracks:'Казармы', factory:'Фабрика', turret:'Турель', refinery:'Спайс-завод', generator:'Генератор',
     harvester:'Доставщик', soldier:'Солдат', tank:'Танк',
   }
   return m[t] || t
@@ -1144,7 +1192,7 @@ export function unitName(t: UnitType): string {
   return { harvester: 'доставщик', soldier: 'солдат', tank: 'танк' }[t]
 }
 export function bldName(t: BuildingType): string {
-  return { palace: 'дворец', barracks: 'казармы', factory: 'фабрику', turret: 'турель', refinery: 'нефтезавод', generator: 'генератор' }[t]
+  return { palace: 'дворец', barracks: 'казармы', factory: 'фабрику', turret: 'турель', refinery: 'спайс-завод', generator: 'генератор' }[t]
 }
 export function factionRu(f: Faction): string {
   return { atreides: 'Атрейдес', harkonnen: 'Харконнен', ordos: 'Ордос', neutral: 'Нейтрал' }[f]

@@ -469,6 +469,12 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const gameRef = useRef<GameState>(createGame(w, h, [...terrain], difficulty))
+  // offscreen cache for terrain layer (expensive to redraw every frame)
+  const terrainCacheRef = useRef<HTMLCanvasElement | null>(null)
+  const terrainCacheVerRef = useRef<number>(-1)
+  // offscreen cache for fog of war (updated every few ticks)
+  const fogCacheRef = useRef<HTMLCanvasElement | null>(null)
+  const fogCacheTickRef = useRef<number>(-1)
   const [, forceRender] = useState(0)
   const [paused, setPaused] = useState(false)
   const [selected, setSelected] = useState<{type:'unit'|'building', id:number} | null>(null)
@@ -499,12 +505,16 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
   }, [])
 
   // ---- game loop (logic) ----
+  // Tick at 10fps; throttle React re-renders to ~4fps (UI panel doesn't need 10fps)
   useEffect(() => {
+    let tickCount = 0
     const iv = setInterval(() => {
       if (pausedRef.current) return
       if (gameRef.current.over) return
       tick(gameRef.current)
-      forceRender(n => n + 1)
+      tickCount++
+      // only re-render React panel every 3 ticks (~300ms) — canvas updates via rAF independently
+      if (tickCount % 3 === 0) forceRender(n => n + 1)
     }, 100)
     return () => clearInterval(iv)
   }, [])
@@ -519,15 +529,29 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
       const z = zoomRef.current
       if (c) {
         const ctx = c.getContext('2d')!
-        // render at zoom resolution for crisp pixels (1:1 with display)
         const dpr = Math.min(window.devicePixelRatio || 1, 2)
         const internalW = Math.round(s.width * TILE_SIZE * z * dpr)
         const internalH = Math.round(s.height * TILE_SIZE * z * dpr)
         if (c.width !== internalW || c.height !== internalH) { c.width = internalW; c.height = internalH }
         ctx.setTransform(z * dpr, 0, 0, z * dpr, 0, 0)
         ctx.imageSmoothingEnabled = true
-        // terrain (seamless per-pixel base + feature overlays)
-        drawTerrainLayer(ctx, s.terrain, s.width, s.height, tNow, s.terrainVersion)
+
+        // --- TERRAIN CACHE: redraw only when terrainVersion changes ---
+        if (terrainCacheVerRef.current !== s.terrainVersion || !terrainCacheRef.current) {
+          const tw = s.width * TILE_SIZE, th = s.height * TILE_SIZE
+          if (!terrainCacheRef.current) {
+            terrainCacheRef.current = document.createElement('canvas')
+          }
+          terrainCacheRef.current.width = tw
+          terrainCacheRef.current.height = th
+          const tctx = terrainCacheRef.current.getContext('2d')!
+          tctx.imageSmoothingEnabled = true
+          drawTerrainLayer(tctx, s.terrain, s.width, s.height, tNow, s.terrainVersion)
+          terrainCacheVerRef.current = s.terrainVersion
+        }
+        // blit cached terrain
+        ctx.drawImage(terrainCacheRef.current, 0, 0)
+
         // build preview
         if (buildModeRef.current && hoverCellRef.current) {
           const bm = buildModeRef.current
@@ -559,7 +583,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
         for (const u of s.units) {
           const moving = u.state === 'move' || u.state === 'attack' || u.state === 'harvest' || u.state === 'return'
           const bob = moving ? Math.sin(tNow * 6 + u.id) * 1 : 0
-          drawUnit(ctx, u.type, u.owner, u.x*TILE_SIZE, u.y*TILE_SIZE, bob)
+          drawUnit(ctx, u.type, u.owner, u.x*TILE_SIZE, u.y*TILE_SIZE, bob, u.facing)
           if (u.hp < u.maxHp) drawHealthBar(ctx, u.x*TILE_SIZE, u.y*TILE_SIZE-TILE_SIZE/2+2, TILE_SIZE-6, u.hp/u.maxHp)
           // cargo indicator for harvesters
           if (u.type === 'harvester' && u.cargo > 0) {
@@ -585,8 +609,17 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
         for (const e of s.explosions) {
           drawExplosion(ctx, e.x*TILE_SIZE, e.y*TILE_SIZE, e.frame, e.maxFrame, e.size, e.color)
         }
-        // fog of war (drawn BEFORE selection/effects so they stay visible)
-        drawFogOfWar(ctx, s.explored, s.visible, s.width, s.height)
+        // fog of war — cached, update every 5 ticks (not every frame)
+        if (fogCacheTickRef.current < Math.floor(s.tick / 5) || !fogCacheRef.current) {
+          if (!fogCacheRef.current) fogCacheRef.current = document.createElement('canvas')
+          fogCacheRef.current.width = s.width * TILE_SIZE
+          fogCacheRef.current.height = s.height * TILE_SIZE
+          const fctx = fogCacheRef.current.getContext('2d')!
+          fctx.clearRect(0, 0, fogCacheRef.current.width, fogCacheRef.current.height)
+          drawFogOfWar(fctx, s.explored, s.visible, s.width, s.height)
+          fogCacheTickRef.current = Math.floor(s.tick / 5)
+        }
+        ctx.drawImage(fogCacheRef.current, 0, 0)
         // selection highlight + range indicator (drawn on top of fog)
         if (sel?.type === 'unit') {
           const u = s.units.find(u=>u.id===sel.id)
@@ -928,6 +961,12 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
                     )}
                     {selBld.type === 'generator' && (
                       <div className="text-xs text-cyan-400 flex items-center gap-1"><Zap className="w-3 h-3"/> Производит: +{CONFIG.generator.energyOutput} энергии</div>
+                    )}
+                    {selBld.type === 'refinery' && (
+                      <div className="text-xs text-orange-400 space-y-0.5">
+                        <div>🏭 Переработка спайса → кредиты</div>
+                        <div className="text-[10px] text-neutral-500">Доставщики разгружаются здесь. Без спайс-завода — только во дворец (медленно).</div>
+                      </div>
                     )}
                     {selBld.type === 'turret' && (
                       <div className="text-xs text-neutral-400">Радиус: {(CONFIG.turret.range * getUpgrade(s, 'atreides', 'turretRange')).toFixed(1)} · Урон: {(CONFIG.turret.dmg * getUpgrade(s, 'atreides', 'turretDmg')).toFixed(0)}</div>
