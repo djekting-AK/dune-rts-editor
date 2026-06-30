@@ -15,9 +15,10 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
-  TERRAIN, TILE_SIZE, drawTerrain, drawBuilding, drawUnit, drawWorm,
+  TERRAIN, TILE_SIZE, drawTerrain, drawTerrainLayer, drawBuilding, drawUnit, drawWorm,
   drawHealthBar, drawSelectionRing, drawMoveMarker,
   getTilePreview, getBuildingPreview, getUnitPreview,
+  clearTerrainCache,
   FACTION_COLORS, type Faction, type BuildingType, type UnitType,
 } from '@/lib/tile-renderer'
 import {
@@ -128,10 +129,13 @@ export default function EditorPage() {
   const [gridW, setGridW] = useState(24)
   const [gridH, setGridH] = useState(24)
   const [grid, setGrid] = useState<number[]>(() => generateDefaultMap(24, 24))
+  const [terrainVer, setTerrainVer] = useState(0)  // bump to invalidate terrain cache
+  // invalidate terrain cache whenever grid changes
+  useEffect(() => { clearTerrainCache(); setTerrainVer(v => v + 1) }, [grid, gridW, gridH])
   const [selectedTile, setSelectedTile] = useState(1)
   const [tool, setTool] = useState<Tool>('brush')
   const [brushSize, setBrushSize] = useState(1)
-  const [showGrid, setShowGrid] = useState(true)
+  const [showGrid, setShowGrid] = useState(false)
   const [history, setHistory] = useState<number[][]>([])
   const [redoStack, setRedoStack] = useState<number[][]>([])
   const [mapName, setMapName] = useState('Арракис')
@@ -157,11 +161,9 @@ export default function EditorPage() {
     ctx.imageSmoothingEnabled = true
     c.width = gridW * TILE_SIZE; c.height = gridH * TILE_SIZE
     const g = previewGrid ?? grid
-    for (let y = 0; y < gridH; y++)
-      for (let x = 0; x < gridW; x++)
-        drawTerrain(ctx, g[y * gridW + x], x, y, Date.now() / 400)
+    drawTerrainLayer(ctx, g, gridW, gridH, Date.now() / 400, terrainVer)
     if (showGrid) {
-      ctx.strokeStyle = 'rgba(0,0,0,0.12)'; ctx.lineWidth = 1
+      ctx.strokeStyle = 'rgba(80,50,15,0.18)'; ctx.lineWidth = 1
       for (let x = 0; x <= gridW; x++) { ctx.beginPath(); ctx.moveTo(x*TILE_SIZE+0.5,0); ctx.lineTo(x*TILE_SIZE+0.5,gridH*TILE_SIZE); ctx.stroke() }
       for (let y = 0; y <= gridH; y++) { ctx.beginPath(); ctx.moveTo(0,y*TILE_SIZE+0.5); ctx.lineTo(gridW*TILE_SIZE,y*TILE_SIZE+0.5); ctx.stroke() }
     }
@@ -177,7 +179,7 @@ export default function EditorPage() {
       ctx.strokeRect(x1*TILE_SIZE, y1*TILE_SIZE, (x2-x1+1)*TILE_SIZE, (y2-y1+1)*TILE_SIZE)
       ctx.setLineDash([])
     }
-  }, [grid, gridW, gridH, showGrid, hoverCell, brushSize, tool, rectStart, previewGrid])
+  }, [grid, gridW, gridH, showGrid, hoverCell, brushSize, tool, rectStart, previewGrid, terrainVer])
 
   useEffect(() => { if (mode === 'editor') drawEditor() }, [drawEditor, mode])
 
@@ -343,9 +345,10 @@ export default function EditorPage() {
           </aside>
           <main className="flex-1 overflow-auto bg-neutral-950 flex items-start justify-center p-6"
             style={{backgroundImage:'radial-gradient(circle,rgba(255,255,255,0.04) 1px,transparent 1px)',backgroundSize:'24px 24px'}}>
-            <div className="shadow-2xl shadow-black/60 ring-1 ring-neutral-800">
+            <div className="shadow-2xl shadow-black/60 ring-1 ring-neutral-800 relative">
               <canvas ref={editorCanvasRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onLeave}
                 className="block cursor-crosshair" style={{maxWidth:'100%'}} />
+              <div className="pointer-events-none absolute inset-0 crt-overlay" />
             </div>
           </main>
           <aside className="w-64 border-l border-neutral-800 bg-neutral-900/50 flex flex-col">
@@ -521,8 +524,8 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
         if (c.width !== internalW || c.height !== internalH) { c.width = internalW; c.height = internalH }
         ctx.setTransform(z * dpr, 0, 0, z * dpr, 0, 0)
         ctx.imageSmoothingEnabled = true
-        // terrain (animated water)
-        for (let y=0;y<s.height;y++) for (let x=0;x<s.width;x++) drawTerrain(ctx, s.terrain[idx(x,y,s.width)], x, y, tNow)
+        // terrain (seamless per-pixel base + feature overlays)
+        drawTerrainLayer(ctx, s.terrain, s.width, s.height, tNow, s.terrainVersion)
         // build preview
         if (buildModeRef.current && hoverCellRef.current) {
           const ok = canBuild(s, 'atreides', buildModeRef.current, hoverCellRef.current.x, hoverCellRef.current.y)
@@ -769,6 +772,8 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
               }}
               onMouseLeave={() => setHoverCell(null)}
               className="block" style={{ width: `${zoom * 100}%`, aspectRatio: `${gameRef.current.width} / ${gameRef.current.height}`, height: 'auto', cursor: 'default' }} />
+            {/* CRT retro overlay — scanlines + vignette + warm grade */}
+            <div className="pointer-events-none absolute inset-0 crt-overlay" />
             {/* Win/Lose overlay */}
             {s.over && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur">

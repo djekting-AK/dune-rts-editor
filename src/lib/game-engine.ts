@@ -70,6 +70,7 @@ export interface GameState {
   difficulty: 'easy' | 'medium' | 'hard'
   over: boolean
   winner: Faction | null
+  terrainVersion: number  // bump when terrain changes (spice depletion) → invalidates terrain cache
 }
 
 // ---------- Config ----------
@@ -129,7 +130,7 @@ export function createGame(width: number, height: number, terrain: number[], dif
       ordos: { faction: 'ordos', credits: 0, alive: false, isAI: true },
       neutral: { faction: 'neutral', credits: 0, alive: false, isAI: false },
     },
-    tick: 0, nextId: 1, events: [], difficulty, over: false, winner: null,
+    tick: 0, nextId: 1, events: [], difficulty, over: false, winner: null, terrainVersion: 0,
   }
   // AI bonus
   if (difficulty === 'medium') s.players.harkonnen.credits += 200
@@ -429,6 +430,7 @@ function updateUnits(s: GameState) {
               // deplete spice
               if (tval === 6) s.terrain[ti] = 5
               else if (tval === 5) s.terrain[ti] = 1
+              s.terrainVersion++
             }
             if (u.cargo >= u.maxCargo) {
               const b = findNearestFriendlyBuilding(s, u.x, u.y, u.owner)
