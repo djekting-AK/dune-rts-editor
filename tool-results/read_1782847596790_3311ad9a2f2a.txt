@@ -1,0 +1,2002 @@
+     1→// tile-renderer.ts — High-detail procedural tile rendering (40px tiles, gradients, shadows, animation)
+     2→
+     3→export const TILE_SIZE = 40
+     4→
+     5→export interface TileDef {
+     6→  id: number
+     7→  name: string
+     8→  category: 'terrain' | 'building' | 'unit'
+     9→  walkable: boolean
+    10→  buildable: boolean
+    11→}
+    12→
+    13→export const TERRAIN: Record<number, TileDef> = {
+    14→  0: { id: 0, name: 'Пустота',      category: 'terrain', walkable: false, buildable: false },
+    15→  1: { id: 1, name: 'Песок',        category: 'terrain', walkable: true,  buildable: true  },
+    16→  2: { id: 2, name: 'Дюны',         category: 'terrain', walkable: true,  buildable: true  },
+    17→  3: { id: 3, name: 'Скала',        category: 'terrain', walkable: false, buildable: true  },
+    18→  4: { id: 4, name: 'Горы',         category: 'terrain', walkable: false, buildable: false },
+    19→  5: { id: 5, name: 'Спайс',        category: 'terrain', walkable: true,  buildable: false },
+    20→  6: { id: 6, name: 'Богатый спайс', category: 'terrain', walkable: true,  buildable: false },
+    21→  7: { id: 7, name: 'Вода',         category: 'terrain', walkable: false, buildable: false },
+    22→}
+    23→
+    24→// ---------- Deterministic hash for texture variation ----------
+    25→function hash(x: number, y: number, seed = 0): number {
+    26→  let h = (x * 374761393 + y * 668265263 + seed * 2147483647) | 0
+    27→  h = (h ^ (h >>> 13)) * 1274126177
+    28→  return ((h ^ (h >>> 16)) >>> 0) / 4294967295
+    29→}
+    30→function mulberry(seed: number) {
+    31→  let a = seed | 0
+    32→  return () => {
+    33→    a = (a + 0x6D2B79F5) | 0
+    34→    let t = a
+    35→    t = Math.imul(t ^ (t >>> 15), t | 1)
+    36→    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    37→    return ((t ^ (t >>> 14)) >>> 0) / 429496296
+    38→  }
+    39→}
+    40→
+    41→// ---------- Pixel helper ----------
+    42→function px(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, color: string) {
+    43→  ctx.fillStyle = color
+    44→  ctx.fillRect(x, y, w, h)
+    45→}
+    46→function rrect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number, color: string) {
+    47→  ctx.fillStyle = color
+    48→  ctx.beginPath()
+    49→  ctx.roundRect(x, y, w, h, r)
+    50→  ctx.fill()
+    51→}
+    52→
+    53→// ============================================================
+    54→//  SEAMLESS TERRAIN RENDERING (no visible tile squares)
+    55→//  Uses world-space noise so neighboring tiles blend continuously.
+    56→// ============================================================
+    57→
+    58→// 2D value noise — smooth, continuous across tile boundaries
+    59→function valueNoise(x: number, y: number): number {
+    60→  const xi = Math.floor(x), yi = Math.floor(y)
+    61→  const xf = x - xi, yf = y - yi
+    62→  const fade = (t: number) => t * t * (3 - 2 * t)
+    63→  const u = fade(xf), v = fade(yf)
+    64→  const a = hash(xi, yi)
+    65→  const b = hash(xi + 1, yi)
+    66→  const c = hash(xi, yi + 1)
+    67→  const d = hash(xi + 1, yi + 1)
+    68→  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v
+    69→}
+    70→
+    71→// Multi-octave noise for richer texture
+    72→function fbm(x: number, y: number, octaves = 3): number {
+    73→  let sum = 0, amp = 0.5, freq = 1
+    74→  for (let i = 0; i < octaves; i++) {
+    75→    sum += valueNoise(x * freq, y * freq) * amp
+    76→    amp *= 0.5; freq *= 2
+    77→  }
+    78→  return sum
+    79→}
+    80→
+    81→// ---------- Cached continuous SAND BASE (per-pixel noise, seamless) ----------
+    82→// Renders the entire map's sand once at half resolution, upscaled smoothly.
+    83→// Key: color varies per-PIXEL using world-space noise → no tile squares.
+    84→const sandBaseCache = new Map<string, HTMLCanvasElement>()
+    85→
+    86→function getSandBase(mapW: number, mapH: number): HTMLCanvasElement {
+    87→  const key = `${mapW}x${mapH}`
+    88→  let c = sandBaseCache.get(key)
+    89→  if (c) return c
+    90→  const scale = 2 // render at 1/2 res, upscale smooth
+    91→  const w = Math.ceil((mapW * TILE_SIZE) / scale)
+    92→  const h = Math.ceil((mapH * TILE_SIZE) / scale)
+    93→  c = document.createElement('canvas')
+    94→  c.width = w; c.height = h
+    95→  const ctx = c.getContext('2d')!
+    96→  const img = ctx.createImageData(w, h)
+    97→  const data = img.data
+    98→  for (let y = 0; y < h; y++) {
+    99→    for (let x = 0; x < w; x++) {
+   100→      // world-space coordinates (in tile units)
+   101→      const wx = (x * scale) / TILE_SIZE
+   102→      const wy = (y * scale) / TILE_SIZE
+   103→      // multi-octave noise for natural sand variation
+   104→      const n = fbm(wx * 0.35, wy * 0.35, 4) // 0..~0.9
+   105→      const n2 = fbm(wx * 1.2 + 100, wy * 1.2 + 100, 2) // fine detail
+   106→      const t = Math.max(0, Math.min(1, n / 0.7))
+   107→      const t2 = Math.max(0, Math.min(1, n2 / 0.6))
+   108→      // warm sand palette: dark amber → golden
+   109→      const r = Math.round(195 + t * 45 + (t2 - 0.5) * 12)
+   110→      const g = Math.round(145 + t * 38 + (t2 - 0.5) * 10)
+   111→      const b = Math.round(68 + t * 27 + (t2 - 0.5) * 6)
+   112→      const i = (y * w + x) * 4
+   113→      data[i] = r; data[i+1] = g; data[i+2] = b; data[i+3] = 255
+   114→    }
+   115→  }
+   116→  ctx.putImageData(img, 0, 0)
+   117→  sandBaseCache.set(key, c)
+   118→  return c
+   119→}
+   120→
+   121→// ---------- FULL TERRAIN BASE (all types, per-pixel, truly seamless) ----------
+   122→// Renders every terrain type with continuous per-pixel noise → NO tile squares.
+   123→// Cached by version; call clearTerrainCache() when terrain changes.
+   124→const terrainBaseCache = new Map<string, HTMLCanvasElement>()
+   125→
+   126→export function clearTerrainCache() {
+   127→  terrainBaseCache.clear()
+   128→  sandBaseCache.clear()
+   129→}
+   130→
+   131→function getTerrainBase(terrain: number[], mapW: number, mapH: number, version: number): HTMLCanvasElement {
+   132→  const key = `${mapW}x${mapH}-v${version}`
+   133→  let c = terrainBaseCache.get(key)
+   134→  if (c) return c
+   135→  const scale = 2
+   136→  const w = Math.ceil((mapW * TILE_SIZE) / scale)
+   137→  const h = Math.ceil((mapH * TILE_SIZE) / scale)
+   138→  c = document.createElement('canvas')
+   139→  c.width = w; c.height = h
+   140→  const ctx = c.getContext('2d')!
+   141→  const img = ctx.createImageData(w, h)
+   142→  const data = img.data
+   143→
+   144→  // color function for each terrain type at world coords (continuous noise)
+   145→  const typeColor = (t: number, wx: number, wy: number): [number, number, number] => {
+   146→    if (t === 0) return [8, 6, 4]
+   147→    if (t === 1 || t === 2 || t === 5 || t === 6) {
+   148→      const n = fbm(wx * 0.35, wy * 0.35, 4)
+   149→      const n2 = fbm(wx * 1.2 + 100, wy * 1.2 + 100, 2)
+   150→      const tn = Math.max(0, Math.min(1, n / 0.7))
+   151→      const tn2 = Math.max(0, Math.min(1, n2 / 0.6))
+   152→      let r = 195 + tn * 45 + (tn2 - 0.5) * 12
+   153→      let g = 145 + tn * 38 + (tn2 - 0.5) * 10
+   154→      let b = 68 + tn * 27 + (tn2 - 0.5) * 6
+   155→      if (t === 5) { r = r * 0.7 + 232 * 0.3; g = g * 0.7 + 93 * 0.3; b = b * 0.7 + 47 * 0.3 }
+   156→      else if (t === 6) { r = r * 0.6 + 200 * 0.4; g = g * 0.6 + 60 * 0.4; b = b * 0.6 + 30 * 0.4 }
+   157→      if (t === 2) { r *= 0.88; g *= 0.86; b *= 0.82 }
+   158→      return [r, g, b]
+   159→    }
+   160→    if (t === 3) {
+   161→      const n = fbm(wx * 0.3, wy * 0.3, 4)
+   162→      const n2 = fbm(wx * 1.5 + 50, wy * 1.5 + 50, 2)
+   163→      const tn = n / 0.7
+   164→      const tn2 = (n2 - 0.5) * 20
+   165→      return [118 + tn * 32 + tn2, 113 + tn * 30 + tn2, 103 + tn * 26 + tn2]
+   166→    }
+   167→    if (t === 4) {
+   168→      const n = fbm(wx * 0.3, wy * 0.3, 4)
+   169→      return [82 + n * 25, 75 + n * 22, 65 + n * 18]
+   170→    }
+   171→    if (t === 7) {
+   172→      const n = fbm(wx * 0.4, wy * 0.4, 3)
+   173→      return [40 + n * 30, 120 + n * 40, 170 + n * 40]
+   174→    }
+   175→    return [8, 6, 4]
+   176→  }
+   177→
+   178→  const typeAt = (wx: number, wy: number): number => {
+   179→    const tx = Math.floor(wx), ty = Math.floor(wy)
+   180→    return (tx >= 0 && ty >= 0 && tx < mapW && ty < mapH) ? terrain[ty * mapW + tx] : 0
+   181→  }
+   182→
+   183→  for (let y = 0; y < h; y++) {
+   184→    for (let x = 0; x < w; x++) {
+   185→      const wx = (x * scale) / TILE_SIZE
+   186→      const wy = (y * scale) / TILE_SIZE
+   187→      const i = (y * w + x) * 4
+   188→      // sample terrain type at this pixel + 4 neighbors for boundary blending
+   189→      const t0 = typeAt(wx, wy)
+   190→      const offsets = [[0.35, 0], [-0.35, 0], [0, 0.35], [0, -0.35]]
+   191→      let r = 0, g = 0, b = 0, total = 0
+   192→      // center weight = 1, each neighbor weight = 0.25 (only if different type)
+   193→      const [cr, cg, cb] = typeColor(t0, wx, wy)
+   194→      r += cr; g += cg; b += cb; total += 1
+   195→      for (const [dx, dy] of offsets) {
+   196→        const tn = typeAt(wx + dx, wy + dy)
+   197→        if (tn !== t0) {
+   198→          const [nr, ng, nb] = typeColor(tn, wx + dx, wy + dy)
+   199→          r += nr * 0.3; g += ng * 0.3; b += nb * 0.3; total += 0.3
+   200→        }
+   201→      }
+   202→      r /= total; g /= total; b /= total
+   203→      data[i] = Math.max(0, Math.min(255, Math.round(r)))
+   204→      data[i+1] = Math.max(0, Math.min(255, Math.round(g)))
+   205→      data[i+2] = Math.max(0, Math.min(255, Math.round(b)))
+   206→      data[i+3] = 255
+   207→    }
+   208→  }
+   209→  ctx.putImageData(img, 0, 0)
+   210→  terrainBaseCache.set(key, c)
+   211→  for (const k of terrainBaseCache.keys()) {
+   212→    if (k !== key) terrainBaseCache.delete(k)
+   213→  }
+   214→  return c
+   215→}
+   216→
+   217→// Render one seamless terrain tile at world position (gx, gy)
+   218→// NOTE: sand base is pre-rendered for the whole map — tiles only draw
+   219→// features ON TOP of it (dunes ripples, spice glow, rock, water, etc.)
+   220→function drawSeamlessTile(
+   221→  ctx: CanvasRenderingContext2D,
+   222→  tileId: number,
+   223→  gx: number, gy: number,
+   224→  animPhase: number,
+   225→) {
+   226→  const s = TILE_SIZE
+   227→  const ox = gx * s, oy = gy * s
+   228→  ctx.save()
+   229→  ctx.translate(ox, oy)
+   230→
+   231→  if (tileId === 0) {
+   232→    ctx.fillStyle = '#080604'
+   233→    ctx.fillRect(0, 0, s, s)
+   234→  } else if (tileId === 1) {
+   235→    // Sand — nothing to draw, sand base shows through (seamless)
+   236→    // optional: very faint grain
+   237→    const rng = mulberry((gx * 73856093) ^ (gy * 19349663))
+   238→    ctx.fillStyle = 'rgba(120,70,20,0.06)'
+   239→    for (let i = 0; i < 4; i++) ctx.fillRect(rng() * s, rng() * s, 1, 1)
+   240→  } else if (tileId === 2) {
+   241→    // Dunes — sand base + ripple lines (continuous wave)
+   242→    const rng = mulberry((gx * 73856093) ^ (gy * 19349663))
+   243→    ctx.fillStyle = 'rgba(120,70,20,0.06)'
+   244→    for (let i = 0; i < 4; i++) ctx.fillRect(rng() * s, rng() * s, 1, 1)
+   245→    // dune ripple crests — continuous across tiles via world coords
+   246→    ctx.strokeStyle = 'rgba(120,75,20,0.4)'
+   247→    ctx.lineWidth = 1.5
+   248→    for (let i = 0; i < 3; i++) {
+   249→      const yo = i * (s / 3) + 5
+   250→      ctx.beginPath()
+   251→      ctx.moveTo(-1, yo)
+   252→      for (let x = 0; x <= s; x += 3) {
+   253→        const wy = yo + Math.sin((gx * s + x) * 0.13 + gy * 0.6) * 3
+   254→        ctx.lineTo(x, wy)
+   255→      }
+   256→      ctx.stroke()
+   257→    }
+   258→    ctx.strokeStyle = 'rgba(255,225,150,0.32)'
+   259→    ctx.lineWidth = 1
+   260→    for (let i = 0; i < 3; i++) {
+   261→      const yo = i * (s / 3) + 3.5
+   262→      ctx.beginPath()
+   263→      ctx.moveTo(-1, yo)
+   264→      for (let x = 0; x <= s; x += 3) {
+   265→        const wy = yo + Math.sin((gx * s + x) * 0.13 + gy * 0.6) * 3
+   266→        ctx.lineTo(x, wy)
+   267→      }
+   268→      ctx.stroke()
+   269→    }
+   270→  } else if (tileId === 3) {
+   271→    // Rock — opaque rocky ground
+   272→    const n = fbm(gx * 0.2, gy * 0.2, 3)
+   273→    const t = n / 0.7
+   274→    const r = Math.round(118 + t * 32)
+   275→    const g = Math.round(113 + t * 30)
+   276→    const b = Math.round(103 + t * 26)
+   277→    ctx.fillStyle = `rgb(${r},${g},${b})`
+   278→    ctx.fillRect(0, 0, s, s)
+   279→    const rng = mulberry((gx * 12345) ^ (gy * 54321))
+   280→    ctx.fillStyle = 'rgba(50,45,35,0.45)'
+   281→    for (let i = 0; i < 4; i++) {
+   282→      ctx.fillRect(rng() * s, rng() * s, 2 + rng() * 4, 1)
+   283→    }
+   284→    ctx.fillStyle = 'rgba(180,175,165,0.35)'
+   285→    for (let i = 0; i < 5; i++) ctx.fillRect(rng() * s, rng() * s, 1, 1)
+   286→  } else if (tileId === 4) {
+   287→    // Mountain — rocky base + soft peak + snow
+   288→    const n = fbm(gx * 0.2, gy * 0.2, 3)
+   289→    ctx.fillStyle = `rgb(${82 + n * 22},${75 + n * 20},${65 + n * 16})`
+   290→    ctx.fillRect(0, 0, s, s)
+   291→    const peakGrad = ctx.createRadialGradient(s / 2, s * 0.6, 2, s / 2, s * 0.6, s * 0.55)
+   292→    peakGrad.addColorStop(0, '#9a8e7e')
+   293→    peakGrad.addColorStop(0.5, '#6a5e50')
+   294→    peakGrad.addColorStop(1, 'rgba(58,50,40,0)')
+   295→    ctx.fillStyle = peakGrad
+   296→    ctx.fillRect(0, 0, s, s)
+   297→    const snow = ctx.createRadialGradient(s / 2, s * 0.25, 1, s / 2, s * 0.25, s * 0.2)
+   298→    snow.addColorStop(0, 'rgba(245,245,250,0.95)')
+   299→    snow.addColorStop(1, 'rgba(245,245,250,0)')
+   300→    ctx.fillStyle = snow
+   301→    ctx.fillRect(0, 0, s, s)
+   302→  } else if (tileId === 5 || tileId === 6) {
+   303→    // Spice — sand base shows through + glowing crystals (semi-transparent)
+   304→    const rich = tileId === 6
+   305→    ctx.fillStyle = rich ? 'rgba(200,60,30,0.22)' : 'rgba(232,93,47,0.16)'
+   306→    ctx.fillRect(0, 0, s, s)
+   307→    const rng = mulberry((gx * 3333) ^ (gy * 7777))
+   308→    const count = rich ? 5 : 4
+   309→    for (let i = 0; i < count; i++) {
+   310→      const cx = 4 + rng() * (s - 8), cy = 4 + rng() * (s - 8)
+   311→      const rad = 4 + rng() * 4
+   312→      const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad)
+   313→      glow.addColorStop(0, rich ? 'rgba(255,100,50,0.85)' : 'rgba(255,140,70,0.7)')
+   314→      glow.addColorStop(0.5, rich ? 'rgba(220,60,30,0.5)' : 'rgba(232,93,47,0.4)')
+   315→      glow.addColorStop(1, 'rgba(232,93,47,0)')
+   316→      ctx.fillStyle = glow
+   317→      ctx.fillRect(cx - rad, cy - rad, rad * 2, rad * 2)
+   318→      ctx.fillStyle = rich ? '#ff7050' : '#ff9060'
+   319→      ctx.fillRect(cx - 1, cy - 1, 2, 2)
+   320→    }
+   321→  } else if (tileId === 7) {
+   322→    // Water — opaque, animated continuous ripples
+   323→    const g = ctx.createLinearGradient(0, 0, 0, s)
+   324→    g.addColorStop(0, '#3aa0c8'); g.addColorStop(1, '#1a5e80')
+   325→    ctx.fillStyle = g; ctx.fillRect(0, 0, s, s)
+   326→    ctx.strokeStyle = 'rgba(150,220,240,0.4)'
+   327→    ctx.lineWidth = 1
+   328→    const phase = animPhase * 0.6
+   329→    for (let i = 0; i < 4; i++) {
+   330→      const yo = (i * (s / 4) + phase) % s
+   331→      ctx.beginPath()
+   332→      ctx.moveTo(-1, yo)
+   333→      for (let x = 0; x <= s; x += 3) {
+   334→        const wy = yo + Math.sin((gx * s + x) * 0.2 + phase) * 1.2
+   335→        ctx.lineTo(x, wy)
+   336→      }
+   337→      ctx.stroke()
+   338→    }
+   339→    const rng = mulberry((gx * 999) ^ (gy * 111))
+   340→    ctx.fillStyle = 'rgba(220,245,255,0.6)'
+   341→    ctx.fillRect((phase * 3 + rng() * s) % s, 3, 2, 1)
+   342→  }
+   343→
+   344→  ctx.restore()
+   345→}
+   346→
+   347→// Soft edge blending: feather borders where rock/water/mountain meets sand
+   348→function blendEdges(
+   349→  ctx: CanvasRenderingContext2D,
+   350→  tileId: number,
+   351→  gx: number, gy: number,
+   352→  terrain: number[], w: number, h: number,
+   353→) {
+   354→  const s = TILE_SIZE
+   355→  const ox = gx * s, oy = gy * s
+   356→  if (tileId === 0 || tileId === 1 || tileId === 2) return
+   357→  const neighbors = [
+   358→    { dx: -1, dy: 0 }, { dx: 1, dy: 0 }, { dx: 0, dy: -1 }, { dx: 0, dy: 1 },
+   359→  ]
+   360→  for (const nb of neighbors) {
+   361→    const nx = gx + nb.dx, ny = gy + nb.dy
+   362→    if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+   363→    const nt = terrain[ny * w + nx]
+   364→    if (nt === tileId || nt === 0) continue
+   365→    if ((nt === 1 || nt === 2) && (tileId === 3 || tileId === 7 || tileId === 4)) {
+   366→      const grad = ctx.createLinearGradient(
+   367→        nb.dx === -1 ? ox : nb.dx === 1 ? ox + s : ox,
+   368→        nb.dy === -1 ? oy : nb.dy === 1 ? oy + s : oy,
+   369→        nb.dx === -1 ? ox + 5 : nb.dx === 1 ? ox + s - 5 : ox,
+   370→        nb.dy === -1 ? oy + 5 : nb.dy === 1 ? oy + s - 5 : oy,
+   371→      )
+   372→      grad.addColorStop(0, 'rgba(210,160,75,0.7)')
+   373→      grad.addColorStop(1, 'rgba(210,160,75,0)')
+   374→      ctx.fillStyle = grad
+   375→      if (nb.dx === -1) ctx.fillRect(ox, oy, 5, s)
+   376→      else if (nb.dx === 1) ctx.fillRect(ox + s - 5, oy, 5, s)
+   377→      else if (nb.dy === -1) ctx.fillRect(ox, oy, s, 5)
+   378→      else if (nb.dy === 1) ctx.fillRect(ox, oy + s - 5, s, 5)
+   379→    }
+   380→  }
+   381→}
+   382→
+   383→// ---------- Public: draw full seamless terrain layer ----------
+   384→// Blits the continuous terrain base (per-pixel, no squares) then draws
+   385→// feature overlays on top (dune ripples, spice glow, water animation, peaks).
+   386→export function drawTerrainLayer(
+   387→  ctx: CanvasRenderingContext2D,
+   388→  terrain: number[], w: number, h: number,
+   389→  animPhase: number,
+   390→  version = 0,
+   391→) {
+   392→  // 1. continuous terrain base — ALL types per-pixel noise, truly seamless
+   393→  const base = getTerrainBase(terrain, w, h, version)
+   394→  ctx.imageSmoothingEnabled = true
+   395→  ctx.drawImage(base, 0, 0, w * TILE_SIZE, h * TILE_SIZE)
+   396→  // 2. per-tile feature overlays (semi-transparent, sand base shows through)
+   397→  for (let y = 0; y < h; y++) {
+   398→    for (let x = 0; x < w; x++) {
+   399→      const t = terrain[y * w + x]
+   400→      if (t === 2) {
+   401→        // dunes: ripple crests on top of sand-colored base
+   402→        drawDuneRipples(ctx, x, y)
+   403→      } else if (t === 5 || t === 6) {
+   404→        // spice: glowing crystal clusters
+   405→        drawSpiceGlow(ctx, x, y, t === 6)
+   406→      } else if (t === 7) {
+   407→        // water: animated ripples
+   408→        drawWaterAnim(ctx, x, y, animPhase)
+   409→      } else if (t === 4) {
+   410→        // mountain: peak + snow cap overlay
+   411→        drawMountainPeak(ctx, x, y)
+   412→      }
+   413→    }
+   414→  }
+   415→}
+   416→
+   417→// Feature overlays — drawn semi-transparently over the seamless base
+   418→function drawDuneRipples(ctx: CanvasRenderingContext2D, gx: number, gy: number) {
+   419→  const s = TILE_SIZE
+   420→  ctx.save()
+   421→  ctx.translate(gx * s, gy * s)
+   422→  // ripples use world-space Y so they flow continuously across tiles
+   423→  ctx.strokeStyle = 'rgba(120,75,20,0.3)'
+   424→  ctx.lineWidth = 1.5
+   425→  for (let i = 0; i < 4; i++) {
+   426→    const yo = ((gy * s + i * 10 + 5) % s)
+   427→    ctx.beginPath()
+   428→    ctx.moveTo(-1, yo)
+   429→    for (let x = 0; x <= s; x += 3) {
+   430→      const wy = yo + Math.sin((gx * s + x) * 0.13 + gy * 0.6) * 3
+   431→      ctx.lineTo(x, wy)
+   432→    }
+   433→    ctx.stroke()
+   434→  }
+   435→  ctx.strokeStyle = 'rgba(255,225,150,0.2)'
+   436→  ctx.lineWidth = 1
+   437→  for (let i = 0; i < 4; i++) {
+   438→    const yo = ((gy * s + i * 10 + 3) % s)
+   439→    ctx.beginPath()
+   440→    ctx.moveTo(-1, yo)
+   441→    for (let x = 0; x <= s; x += 3) {
+   442→      const wy = yo + Math.sin((gx * s + x) * 0.13 + gy * 0.6) * 3
+   443→      ctx.lineTo(x, wy)
+   444→    }
+   445→    ctx.stroke()
+   446→  }
+   447→  ctx.restore()
+   448→}
+   449→
+   450→function drawSpiceGlow(ctx: CanvasRenderingContext2D, gx: number, gy: number, rich: boolean) {
+   451→  const s = TILE_SIZE
+   452→  ctx.save()
+   453→  ctx.translate(gx * s, gy * s)
+   454→  // uniform spice field overlay — clear orange tint, not scattered dots
+   455→  ctx.fillStyle = rich ? 'rgba(200,50,20,0.4)' : 'rgba(232,93,47,0.3)'
+   456→  ctx.fillRect(0, 0, s, s)
+   457→  // a few crystal clusters (deterministic) — bright spots
+   458→  const rng = mulberry((gx * 3333) ^ (gy * 7777))
+   459→  const count = rich ? 3 : 2
+   460→  for (let i = 0; i < count; i++) {
+   461→    const cx = 6 + rng() * (s - 12), cy = 6 + rng() * (s - 12)
+   462→    const rad = 5 + rng() * 3
+   463→    const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad)
+   464→    glow.addColorStop(0, rich ? 'rgba(255,120,60,0.8)' : 'rgba(255,150,80,0.65)')
+   465→    glow.addColorStop(1, 'rgba(232,93,47,0)')
+   466→    ctx.fillStyle = glow
+   467→    ctx.fillRect(cx - rad, cy - rad, rad * 2, rad * 2)
+   468→  }
+   469→  // sparkle highlights
+   470→  ctx.fillStyle = rich ? '#ffb070' : '#ffd090'
+   471→  for (let i = 0; i < 3; i++) {
+   472→    ctx.fillRect(4 + rng() * (s - 8), 4 + rng() * (s - 8), 1, 1)
+   473→  }
+   474→  ctx.restore()
+   475→}
+   476→
+   477→function drawWaterAnim(ctx: CanvasRenderingContext2D, gx: number, gy: number, animPhase: number) {
+   478→  const s = TILE_SIZE
+   479→  ctx.save()
+   480→  ctx.translate(gx * s, gy * s)
+   481→  ctx.strokeStyle = 'rgba(150,220,240,0.3)'
+   482→  ctx.lineWidth = 1
+   483→  const phase = animPhase * 0.6
+   484→  for (let i = 0; i < 3; i++) {
+   485→    const yo = (i * (s / 3) + phase) % s
+   486→    ctx.beginPath()
+   487→    ctx.moveTo(-1, yo)
+   488→    for (let x = 0; x <= s; x += 3) {
+   489→      const wy = yo + Math.sin((gx * s + x) * 0.2 + phase) * 1.2
+   490→      ctx.lineTo(x, wy)
+   491→    }
+   492→    ctx.stroke()
+   493→  }
+   494→  ctx.restore()
+   495→}
+   496→
+   497→function drawMountainPeak(ctx: CanvasRenderingContext2D, gx: number, gy: number) {
+   498→  const s = TILE_SIZE
+   499→  ctx.save()
+   500→  ctx.translate(gx * s, gy * s)
+   501→  // soft peak highlight
+   502→  const peakGrad = ctx.createRadialGradient(s / 2, s * 0.6, 2, s / 2, s * 0.6, s * 0.5)
+   503→  peakGrad.addColorStop(0, 'rgba(154,142,126,0.5)')
+   504→  peakGrad.addColorStop(0.5, 'rgba(106,94,80,0.3)')
+   505→  peakGrad.addColorStop(1, 'rgba(58,50,40,0)')
+   506→  ctx.fillStyle = peakGrad
+   507→  ctx.fillRect(0, 0, s, s)
+   508→  // snow cap
+   509→  const snow = ctx.createRadialGradient(s / 2, s * 0.25, 1, s / 2, s * 0.25, s * 0.18)
+   510→  snow.addColorStop(0, 'rgba(245,245,250,0.7)')
+   511→  snow.addColorStop(1, 'rgba(245,245,250,0)')
+   512→  ctx.fillStyle = snow
+   513→  ctx.fillRect(0, 0, s, s)
+   514→  ctx.restore()
+   515→}
+   516→
+   517→// Backward-compatible single-tile draw (used by editor preview etc.)
+   518→export function drawTerrain(
+   519→  ctx: CanvasRenderingContext2D,
+   520→  tileId: number,
+   521→  gx: number, gy: number,
+   522→  animPhase = 0,
+   523→  _terrain?: number[], _w?: number, _h?: number,
+   524→) {
+   525→  drawSeamlessTile(ctx, tileId, gx, gy, animPhase)
+   526→}
+   527→
+   528→// ---------- Palette preview (for editor) ----------
+   529→export function getTerrainTile(tileId: number, _variant = 0): HTMLCanvasElement {
+   530→  const c = document.createElement('canvas')
+   531→  c.width = TILE_SIZE; c.height = TILE_SIZE
+   532→  const ctx = c.getContext('2d')!
+   533→  ctx.imageSmoothingEnabled = true
+   534→  if (tileId !== 0) {
+   535→    ctx.fillStyle = '#d4a040'
+   536→    ctx.fillRect(0, 0, TILE_SIZE, TILE_SIZE)
+   537→  }
+   538→  drawSeamlessTile(ctx, tileId, 0, 0, 0)
+   539→  return c
+   540→}
+   541→
+   542→// ---------- Faction colors ----------
+   543→export const FACTION_COLORS = {
+   544→  atreides:  { primary: '#2e6fd0', light: '#5a9dee', dark: '#1a4a90', flag: '#4a8fd8', trim: '#88c0ff' },
+   545→  harkonnen: { primary: '#8a2098', light: '#b84cc0', dark: '#5a1068', flag: '#a840b8', trim: '#d070e0' },
+   546→  ordos:     { primary: '#1a9e4d', light: '#40c870', dark: '#0d6a2e', flag: '#22c55e', trim: '#60e090' },
+   547→  neutral:   { primary: '#9a8a6a', light: '#c0b08a', dark: '#6a5a3a', flag: '#b8a878', trim: '#d0c098' },
+   548→}
+   549→export type Faction = keyof typeof FACTION_COLORS
+   550→
+   551→// ---------- Building rendering (detailed, volumetric) ----------
+   552→export type BuildingType = 'palace' | 'barracks' | 'factory' | 'turret' | 'refinery' | 'generator'
+   553→
+   554→const buildingCache = new Map<string, HTMLCanvasElement>()
+   555→
+   556→function renderBuilding(type: BuildingType, faction: Faction, w: number, h: number): HTMLCanvasElement {
+   557→  const key = `${type}_${faction}_${w}x${h}`
+   558→  let c = buildingCache.get(key)
+   559→  if (c) return c
+   560→  c = document.createElement('canvas')
+   561→  const W = w * TILE_SIZE
+   562→  const H = h * TILE_SIZE
+   563→  // Semi-dimetric: facade rises upward from the base with a 2:1 height ratio
+   564→  // (facade height = 1/2 of footprint width). Canvas is now taller than the
+   565→  // flat footprint: H + facadeHeight.
+   566→  const facadeHeight = W / 2
+   567→  c.width = W; c.height = H + facadeHeight
+   568→  const ctx = c.getContext('2d')!
+   569→  const col = FACTION_COLORS[faction]
+   570→  const rng = mulberry((type.charCodeAt(0) * 7919) ^ (faction.charCodeAt(0) * 4099) ^ (w * 131) ^ (h * 257))
+   571→
+   572→  // ============================================================
+   573→  //  SEMI-DIMETRIC FACADE (vertical wall section, y = 0 .. facadeHeight)
+   574→  //  Suggests a 30° viewing angle — building rises upward from the ground.
+   575→  //  Side walls darker (perspective shading), front face lighter (lit).
+   576→  //  Futuristic details (glowing windows, panel seams, faction stripe) appear
+   577→  //  on this vertical facade instead of flat on the ground.
+   578→  // ============================================================
+   579→
+   580→  // outer dark frame
+   581→  rrect(ctx, 0, 0, W, facadeHeight, 2, '#0a0a0a')
+   582→  // main wall gradient (top=further/darker, bottom=closer/lighter — perspective)
+   583→  const wallGrad = ctx.createLinearGradient(0, 0, 0, facadeHeight)
+   584→  wallGrad.addColorStop(0, '#3a3a3a')
+   585→  wallGrad.addColorStop(0.5, '#5a5a5a')
+   586→  wallGrad.addColorStop(1, '#7a7a7a')
+   587→  rrect(ctx, 1, 1, W - 2, facadeHeight - 2, 1, wallGrad as any)
+   588→  // side wall shading (darker shades on side walls — perspective shading)
+   589→  const sideW = Math.max(4, W * 0.1)
+   590→  const leftSideGrad = ctx.createLinearGradient(0, 0, sideW, 0)
+   591→  leftSideGrad.addColorStop(0, 'rgba(0,0,0,0.55)')
+   592→  leftSideGrad.addColorStop(1, 'rgba(0,0,0,0)')
+   593→  ctx.fillStyle = leftSideGrad
+   594→  ctx.fillRect(0, 0, sideW, facadeHeight)
+   595→  const rightSideGrad = ctx.createLinearGradient(W - sideW, 0, W, 0)
+   596→  rightSideGrad.addColorStop(0, 'rgba(0,0,0,0)')
+   597→  rightSideGrad.addColorStop(1, 'rgba(0,0,0,0.55)')
+   598→  ctx.fillStyle = rightSideGrad
+   599→  ctx.fillRect(W - sideW, 0, sideW, facadeHeight)
+   600→  // top edge highlight (sun-baked rim — catches the light at the parapet)
+   601→  px(ctx, 1, 1, W - 2, 1, '#8a8a8a')
+   602→  px(ctx, 1, 2, W - 2, 1, '#6a6a6a')
+   603→  // horizontal panel seams (reinforced concrete bands)
+   604→  for (let i = 1; i < 3; i++) {
+   605→    const py2 = Math.floor(facadeHeight * i / 3)
+   606→    px(ctx, 1, py2, W - 2, 1, '#1a1a1a')
+   607→    px(ctx, 1, py2 + 1, W - 2, 1, '#5a5a5a')
+   608→  }
+   609→  // vertical panel seams (metal panel divisions)
+   610→  const numVSeams = Math.max(3, Math.floor(W / 20))
+   611→  for (let i = 1; i < numVSeams; i++) {
+   612→    const sx2 = Math.floor(W * i / numVSeams)
+   613→    px(ctx, sx2, 2, 1, facadeHeight - 3, '#1a1a1a')
+   614→    px(ctx, sx2 + 1, 2, 1, facadeHeight - 3, '#4a4a4a')
+   615→  }
+   616→  // glowing cyan slit windows (2 rows × N columns — futuristic lit windows)
+   617→  const winRows = 2
+   618→  const winCols = Math.max(2, Math.floor(W / 24))
+   619→  const cellW = (W - 8) / winCols
+   620→  const winW = Math.min(cellW - 4, 10)
+   621→  const winH = 4
+   622→  for (let row = 0; row < winRows; row++) {
+   623→    const wy = 6 + row * Math.max(8, (facadeHeight - 12) / winRows)
+   624→    for (let col2 = 0; col2 < winCols; col2++) {
+   625→      const wx2 = 4 + col2 * cellW + (cellW - winW) / 2
+   626→      rrect(ctx, wx2, wy, winW, winH, 1, '#0080a0')
+   627→      rrect(ctx, wx2, wy + 1, winW, winH - 2, 1, '#00d0ff')
+   628→      px(ctx, wx2, wy, winW, 1, '#80e8ff')
+   629→      // window frame top/bottom
+   630→      px(ctx, wx2 - 1, wy - 1, winW + 2, 1, '#1a1a1a')
+   631→      px(ctx, wx2 - 1, wy + winH, winW + 2, 1, '#1a1a1a')
+   632→    }
+   633→  }
+   634→  // faction accent stripe near bottom of facade (just above the footprint)
+   635→  px(ctx, 1, facadeHeight - 4, W - 2, 2, col.primary)
+   636→  px(ctx, 1, facadeHeight - 2, W - 2, 1, col.trim)
+   637→
+   638→  // ============================================================
+   639→  //  GROUND FOOTPRINT (top-down view, y = facadeHeight .. facadeHeight + H)
+   640→  //  All existing per-building artwork is translated down by facadeHeight
+   641→  //  so it occupies the bottom portion of the canvas (the flat ground base).
+   642→  // ============================================================
+   643→  ctx.save()
+   644→  ctx.translate(0, facadeHeight)
+   645→
+   646→  // ground shadow (spans building footprint)
+   647→  ctx.fillStyle = 'rgba(0,0,0,0.38)'
+   648→  ctx.beginPath()
+   649→  ctx.ellipse(W / 2, H - 3, W / 2 - 4, 5, 0, 0, Math.PI * 2)
+   650→  ctx.fill()
+   651→  // soft inner shadow on ground
+   652→  ctx.fillStyle = 'rgba(0,0,0,0.2)'
+   653→  ctx.beginPath()
+   654→  ctx.ellipse(W / 2, H - 2, W / 2 - 8, 2, 0, 0, Math.PI * 2)
+   655→  ctx.fill()
+   656→
+   657→  // ============================================================
+   658→  //  FUTURISTIC / SCI-FI BUILDINGS (Dune 1984/2021 aesthetic)
+   659→  //  Brutalist concrete + metallic panels + glowing energy tech
+   660→  //  Palette: metallic grays primary; faction colors as accents;
+   661→  //           cyan = energy; orange = spice; amber = warning/lights
+   662→  // ============================================================
+   663→
+   664→  if (type === 'palace') {
+   665→    // ===== PALACE (2x2 = 80x80): Brutalist command fortress =====
+   666→    // Wide stepped concrete base + central command tower + comm antenna
+   667→    // + glowing slit windows + energy shield emitters + blast door
+   668→
+   669→    // --- Lower wide base (stepped concrete platform) ---
+   670→    const baseTop = H * 0.46
+   671→    const baseBottom = H - 4
+   672→    rrect(ctx, 2, baseTop, W - 4, baseBottom - baseTop, 2, '#1a1a1a')
+   673→    const baseGrad = ctx.createLinearGradient(0, baseTop, 0, baseBottom)
+   674→    baseGrad.addColorStop(0, '#6a6a6a')
+   675→    baseGrad.addColorStop(0.4, '#4a4a4a')
+   676→    baseGrad.addColorStop(1, '#2a2a2a')
+   677→    rrect(ctx, 3, baseTop + 1, W - 6, baseBottom - baseTop - 2, 2, baseGrad as any)
+   678→    // top edge highlight (sun-baked concrete rim)
+   679→    px(ctx, 3, baseTop + 1, W - 6, 1, '#8a8a8a')
+   680→    // horizontal concrete seam lines
+   681→    px(ctx, 3, baseTop + 10, W - 6, 1, '#1a1a1a')
+   682→    px(ctx, 3, baseTop + 11, W - 6, 1, '#5a5a5a')
+   683→    px(ctx, 3, baseTop + 22, W - 6, 1, '#1a1a1a')
+   684→    px(ctx, 3, baseTop + 23, W - 6, 1, '#5a5a5a')
+   685→    // beveled corner cuts (angular brutalist)
+   686→    px(ctx, 2, baseTop, 3, 1, '#1a1a1a')
+   687→    px(ctx, W - 5, baseTop, 3, 1, '#1a1a1a')
+   688→
+   689→    // --- Central command tower (tall, angular, brutalist) ---
+   690→    const tw = W * 0.34
+   691→    const th = H * 0.62
+   692→    const tx = W / 2 - tw / 2
+   693→    const ty = H - th - 3
+   694→    rrect(ctx, tx - 2, ty - 2, tw + 4, th + 2, 1, '#1a1a1a')
+   695→    const towerGrad = ctx.createLinearGradient(tx, 0, tx + tw, 0)
+   696→    towerGrad.addColorStop(0, '#3a3a3a')
+   697→    towerGrad.addColorStop(0.2, '#6a6a6a')
+   698→    towerGrad.addColorStop(0.5, '#7a7a7a')
+   699→    towerGrad.addColorStop(0.8, '#5a5a5a')
+   700→    towerGrad.addColorStop(1, '#2a2a2a')
+   701→    rrect(ctx, tx, ty, tw, th, 1, towerGrad as any)
+   702→    px(ctx, tx, ty, tw, 1, '#9a9a9a')
+   703→
+   704→    // vertical metal panel seams (4 panels)
+   705→    for (let i = 1; i < 4; i++) {
+   706→      const sx = tx + (tw * i / 4)
+   707→      px(ctx, sx, ty + 1, 1, th - 1, '#1a1a1a')
+   708→      px(ctx, sx + 1, ty + 1, 1, th - 1, '#6a6a6a')
+   709→    }
+   710→    // horizontal floor bands (reinforced levels)
+   711→    for (let i = 1; i < 4; i++) {
+   712→      const by = ty + (th * i / 4)
+   713→      px(ctx, tx, by, tw, 1, '#1a1a1a')
+   714→      px(ctx, tx, by + 1, tw, 1, '#6a6a6a')
+   715→    }
+   716→
+   717→    // glowing cyan horizontal slit windows (3 rows on tower)
+   718→    for (let row = 0; row < 3; row++) {
+   719→      const wy = ty + th * 0.15 + row * (th * 0.22)
+   720→      const ww = tw * 0.28
+   721→      rrect(ctx, tx + 4, wy, ww, 3, 1, '#0080a0')
+   722→      rrect(ctx, tx + 4, wy + 1, ww, 1, 1, '#00d0ff')
+   723→      px(ctx, tx + 4, wy, ww, 1, '#80e8ff')
+   724→      rrect(ctx, tx + tw - ww - 4, wy, ww, 3, 1, '#0080a0')
+   725→      rrect(ctx, tx + tw - ww - 4, wy + 1, ww, 1, 1, '#00d0ff')
+   726→      px(ctx, tx + tw - ww - 4, wy, ww, 1, '#80e8ff')
+   727→    }
+   728→
+   729→    // faction accent stripe (subtle, on tower)
+   730→    px(ctx, tx, ty + th * 0.78, tw, 2, col.primary)
+   731→    px(ctx, tx, ty + th * 0.78 + 2, tw, 1, col.trim)
+   732→
+   733→    // --- Tower top (flat roof pad) ---
+   734→    rrect(ctx, tx - 4, ty - 6, tw + 8, 8, 1, '#1a1a1a')
+   735→    rrect(ctx, tx - 3, ty - 5, tw + 6, 6, 1, '#5a5a5a')
+   736→    px(ctx, tx - 3, ty - 5, tw + 6, 1, '#8a8a8a')
+   737→    // corner comm pads
+   738→    for (const cx2 of [tx - 2, tx + tw - 2]) {
+   739→      rrect(ctx, cx2, ty - 10, 4, 5, 1, '#3a3a3a')
+   740→      px(ctx, cx2, ty - 10, 4, 1, '#6a6a6a')
+   741→    }
+   742→
+   743→    // --- Central comm antenna with glowing tip ---
+   744→    const antX = W / 2
+   745→    const antTopY = H * 0.05
+   746→    px(ctx, antX, antTopY, 1, ty - 4 - antTopY, '#6a6a6a')
+   747→    px(ctx, antX - 3, antTopY + 6, 7, 1, '#5a5a5a')
+   748→    px(ctx, antX - 2, antTopY + 12, 5, 1, '#5a5a5a')
+   749→    const tipGrad = ctx.createRadialGradient(antX, antTopY, 0, antX, antTopY, 6)
+   750→    tipGrad.addColorStop(0, '#c0f4ff')
+   751→    tipGrad.addColorStop(0.3, '#00d0ff')
+   752→    tipGrad.addColorStop(1, 'rgba(0,208,255,0)')
+   753→    ctx.fillStyle = tipGrad
+   754→    ctx.fillRect(antX - 6, antTopY - 6, 12, 12)
+   755→    ctx.fillStyle = '#ffffff'
+   756→    ctx.beginPath(); ctx.arc(antX, antTopY, 1.5, 0, Math.PI * 2); ctx.fill()
+   757→
+   758→    // --- Side comm dishes (smaller antennas on roof pad corners) ---
+   759→    for (const dx of [tx - 3, tx + tw - 2]) {
+   760→      px(ctx, dx + 1, ty - 18, 1, 12, '#5a5a5a')
+   761→      ctx.strokeStyle = '#7a7a7a'; ctx.lineWidth = 1
+   762→      ctx.beginPath()
+   763→      ctx.moveTo(dx - 1, ty - 16)
+   764→      ctx.lineTo(dx + 3, ty - 18)
+   765→      ctx.stroke()
+   766→      ctx.fillStyle = '#00d0ff'
+   767→      ctx.beginPath(); ctx.arc(dx + 1, ty - 18, 0.8, 0, Math.PI * 2); ctx.fill()
+   768→    }
+   769→
+   770→    // --- Energy shield emitters (glowing corner nodes on base) ---
+   771→    for (const ex of [6, W - 7]) {
+   772→      for (const ey of [baseTop + 4, baseTop + 28]) {
+   773→        const sg = ctx.createRadialGradient(ex, ey, 0, ex, ey, 4)
+   774→        sg.addColorStop(0, '#c0f4ff')
+   775→        sg.addColorStop(0.4, '#00d0ff')
+   776→        sg.addColorStop(1, 'rgba(0,208,255,0)')
+   777→        ctx.fillStyle = sg
+   778→        ctx.fillRect(ex - 4, ey - 4, 8, 8)
+   779→        ctx.fillStyle = '#3a3a3a'
+   780→        ctx.beginPath(); ctx.arc(ex, ey, 1.5, 0, Math.PI * 2); ctx.fill()
+   781→        ctx.fillStyle = '#ffffff'
+   782→        ctx.beginPath(); ctx.arc(ex, ey, 0.7, 0, Math.PI * 2); ctx.fill()
+   783→      }
+   784→    }
+   785→
+   786→    // --- Faction banner (vertical hanging flag from tower) ---
+   787→    px(ctx, tx + tw - 6, ty + 2, 1, 14, '#1a1a1a')
+   788→    rrect(ctx, tx + tw - 5, ty + 2, 6, 12, 1, col.flag)
+   789→    px(ctx, tx + tw - 5, ty + 2, 6, 1, col.trim)
+   790→    ctx.fillStyle = col.trim
+   791→    ctx.beginPath(); ctx.arc(tx + tw - 2, ty + 8, 1.2, 0, Math.PI * 2); ctx.fill()
+   792→
+   793→    // --- Main blast door (rectangular, with hazard stripes) ---
+   794→    const doorW = W * 0.22
+   795→    const doorH = H * 0.18
+   796→    const doorX = W / 2 - doorW / 2
+   797→    const doorY = H - doorH - 3
+   798→    rrect(ctx, doorX - 2, doorY - 2, doorW + 4, doorH + 4, 2, '#1a1a1a')
+   799→    const doorGrad = ctx.createLinearGradient(0, doorY, 0, doorY + doorH)
+   800→    doorGrad.addColorStop(0, '#5a5a5a')
+   801→    doorGrad.addColorStop(0.5, '#3a3a3a')
+   802→    doorGrad.addColorStop(1, '#1a1a1a')
+   803→    rrect(ctx, doorX, doorY, doorW, doorH, 1, doorGrad as any)
+   804→    px(ctx, W / 2, doorY, 1, doorH, '#0a0a0a')
+   805→    for (let i = 0; i < 6; i++) {
+   806→      px(ctx, doorX + i * (doorW / 6), doorY + 2, doorW / 6, 2, i % 2 === 0 ? '#ffaa30' : '#1a1a1a')
+   807→    }
+   808→    for (let i = 1; i < 3; i++) {
+   809→      px(ctx, doorX + 1, doorY + (doorH * i / 3), doorW - 2, 1, '#1a1a1a')
+   810→    }
+   811→    px(ctx, doorX + 3, doorY + doorH - 5, 2, 2, col.flag)
+   812→    px(ctx, doorX + doorW - 5, doorY + doorH - 5, 2, 2, col.flag)
+   813→
+   814→    // --- Side wall vents (vertical louvered slits) ---
+   815→    for (const side of [0, 1]) {
+   816→      const vx = side === 0 ? 5 : W - 11
+   817→      for (let i = 0; i < 4; i++) {
+   818→        const vy = baseTop + 14 + i * 6
+   819→        px(ctx, vx, vy, 6, 2, '#1a1a1a')
+   820→        px(ctx, vx, vy, 6, 1, '#3a3a3a')
+   821→      }
+   822→    }
+   823→
+   824→    // --- Rooftop solar array (flat dark panels on base top edge) ---
+   825→    for (let i = 0; i < 3; i++) {
+   826→      const sx = 8 + i * 22
+   827→      rrect(ctx, sx, baseTop - 4, 18, 4, 1, '#1a1a1a')
+   828→      rrect(ctx, sx + 1, baseTop - 3, 16, 2, 1, '#1a2a4a')
+   829→      px(ctx, sx + 1, baseTop - 3, 16, 1, '#3a5a8a')
+   830→      px(ctx, sx + 6, baseTop - 3, 1, 2, '#0a1a2a')
+   831→      px(ctx, sx + 12, baseTop - 3, 1, 2, '#0a1a2a')
+   832→    }
+   833→
+   834→    // --- Ground-level exhaust vents (small glowing amber lights) ---
+   835→    for (let i = 0; i < 4; i++) {
+   836→      const lx = 14 + i * (W - 28) / 3
+   837→      ctx.fillStyle = '#ffaa30'
+   838→      ctx.beginPath(); ctx.arc(lx, H - 6, 1, 0, Math.PI * 2); ctx.fill()
+   839→      ctx.fillStyle = '#ffe080'
+   840→      ctx.beginPath(); ctx.arc(lx, H - 6, 0.4, 0, Math.PI * 2); ctx.fill()
+   841→    }
+   842→  } else if (type === 'barracks') {
+   843→    // ===== BARRACKS (2x2 = 80x80): Angular prefab military structure =====
+   844→    // Flat roof, vertical slit windows (glowing), blast door, coolant pipes, antenna array
+   845→
+   846→    // --- Main structure (angular prefab box) ---
+   847→    const wallTop = H * 0.36
+   848→    const wallBottom = H - 4
+   849→    rrect(ctx, 6, wallTop, W - 12, wallBottom - wallTop, 2, '#1a1a1a')
+   850→    const wallGrad = ctx.createLinearGradient(0, wallTop, 0, wallBottom)
+   851→    wallGrad.addColorStop(0, '#7a7a7a')
+   852→    wallGrad.addColorStop(0.4, '#5a5a5a')
+   853→    wallGrad.addColorStop(1, '#2a2a2a')
+   854→    rrect(ctx, 8, wallTop + 1, W - 16, wallBottom - wallTop - 2, 1, wallGrad as any)
+   855→    // top edge highlight (metal rim)
+   856→    px(ctx, 8, wallTop + 1, W - 16, 1, '#9a9a9a')
+   857→    // horizontal panel seam line
+   858→    px(ctx, 8, wallTop + (wallBottom - wallTop) * 0.5, W - 16, 1, '#1a1a1a')
+   859→    px(ctx, 8, wallTop + (wallBottom - wallTop) * 0.5 + 1, W - 16, 1, '#5a5a5a')
+   860→
+   861→    // --- Flat roof pad with beveled edges ---
+   862→    rrect(ctx, 4, wallTop - 4, W - 8, 6, 1, '#1a1a1a')
+   863→    rrect(ctx, 5, wallTop - 3, W - 10, 4, 1, '#5a5a5a')
+   864→    px(ctx, 5, wallTop - 3, W - 10, 1, '#8a8a8a')
+   865→    // beveled corner cuts (angular)
+   866→    px(ctx, 4, wallTop - 4, 3, 1, '#1a1a1a')
+   867→    px(ctx, W - 7, wallTop - 4, 3, 1, '#1a1a1a')
+   868→    // rooftop equipment housing
+   869→    rrect(ctx, W * 0.3, wallTop - 8, W * 0.4, 5, 1, '#3a3a3a')
+   870→    px(ctx, W * 0.3, wallTop - 8, W * 0.4, 1, '#6a6a6a')
+   871→    // rooftop vent slits (glowing amber)
+   872→    for (let i = 0; i < 4; i++) {
+   873→      const vx = W * 0.3 + 3 + i * (W * 0.4 - 6) / 3
+   874→      px(ctx, vx, wallTop - 7, 2, 3, '#1a1a1a')
+   875→      px(ctx, vx, wallTop - 6, 2, 1, '#ffaa30')
+   876→    }
+   877→
+   878→    // --- Antenna array (multiple antennas on roof) ---
+   879→    // main antenna (tall, with red beacon)
+   880→    const antX = W * 0.25
+   881→    const antTopY = H * 0.06
+   882→    px(ctx, antX, antTopY, 1, wallTop - 4 - antTopY, '#5a5a5a')
+   883→    px(ctx, antX - 2, antTopY + 6, 5, 1, '#5a5a5a')
+   884→    px(ctx, antX - 1, antTopY + 12, 3, 1, '#5a5a5a')
+   885→    const antBeaconGrad = ctx.createRadialGradient(antX, antTopY, 0, antX, antTopY, 3)
+   886→    antBeaconGrad.addColorStop(0, '#ffa0a0')
+   887→    antBeaconGrad.addColorStop(0.5, '#ff4040')
+   888→    antBeaconGrad.addColorStop(1, 'rgba(255,64,64,0)')
+   889→    ctx.fillStyle = antBeaconGrad
+   890→    ctx.fillRect(antX - 3, antTopY - 3, 6, 6)
+   891→    ctx.fillStyle = '#ff4040'
+   892→    ctx.beginPath(); ctx.arc(antX, antTopY, 1.2, 0, Math.PI * 2); ctx.fill()
+   893→
+   894→    // secondary antenna (shorter, cyan tip)
+   895→    const ant2X = W * 0.75
+   896→    const ant2TopY = H * 0.14
+   897→    px(ctx, ant2X, ant2TopY, 1, wallTop - 4 - ant2TopY, '#5a5a5a')
+   898→    px(ctx, ant2X - 1, ant2TopY + 4, 3, 1, '#5a5a5a')
+   899→    const ant2Grad = ctx.createRadialGradient(ant2X, ant2TopY, 0, ant2X, ant2TopY, 3)
+   900→    ant2Grad.addColorStop(0, '#c0f4ff')
+   901→    ant2Grad.addColorStop(0.5, '#00d0ff')
+   902→    ant2Grad.addColorStop(1, 'rgba(0,208,255,0)')
+   903→    ctx.fillStyle = ant2Grad
+   904→    ctx.fillRect(ant2X - 3, ant2TopY - 3, 6, 6)
+   905→    ctx.fillStyle = '#00d0ff'
+   906→    ctx.beginPath(); ctx.arc(ant2X, ant2TopY, 1, 0, Math.PI * 2); ctx.fill()
+   907→
+   908→    // communications dish (small angled line)
+   909→    const dishX = W / 2
+   910→    const dishTopY = H * 0.16
+   911→    px(ctx, dishX, dishTopY, 1, wallTop - 4 - dishTopY, '#5a5a5a')
+   912→    ctx.strokeStyle = '#7a7a7a'; ctx.lineWidth = 1
+   913→    ctx.beginPath()
+   914→    ctx.moveTo(dishX - 3, dishTopY + 2)
+   915→    ctx.lineTo(dishX + 3, dishTopY)
+   916→    ctx.stroke()
+   917→    ctx.fillStyle = '#00d0ff'
+   918→    ctx.beginPath(); ctx.arc(dishX, dishTopY + 1, 0.8, 0, Math.PI * 2); ctx.fill()
+   919→
+   920→    // --- External coolant pipes (horizontal pipes along wall) ---
+   921→    const pipeY = wallTop + (wallBottom - wallTop) * 0.5 + 8
+   922→    ctx.strokeStyle = '#3a3a3a'; ctx.lineWidth = 3
+   923→    ctx.beginPath()
+   924→    ctx.moveTo(10, pipeY)
+   925→    ctx.lineTo(28, pipeY)
+   926→    ctx.lineTo(28, pipeY - 4)
+   927→    ctx.lineTo(40, pipeY - 4)
+   928→    ctx.stroke()
+   929→    ctx.beginPath()
+   930→    ctx.moveTo(W - 40, pipeY - 4)
+   931→    ctx.lineTo(W - 28, pipeY - 4)
+   932→    ctx.lineTo(W - 28, pipeY)
+   933→    ctx.lineTo(W - 10, pipeY)
+   934→    ctx.stroke()
+   935→    // pipe highlights
+   936→    ctx.strokeStyle = '#6a6a6a'; ctx.lineWidth = 1
+   937→    ctx.beginPath()
+   938→    ctx.moveTo(10, pipeY - 1); ctx.lineTo(28, pipeY - 1)
+   939→    ctx.moveTo(W - 28, pipeY - 1); ctx.lineTo(W - 10, pipeY - 1)
+   940→    ctx.stroke()
+   941→    // pipe joints (flanges)
+   942→    for (const jx of [28, W - 28]) {
+   943→      rrect(ctx, jx - 2, pipeY - 5, 4, 8, 1, '#5a5a5a')
+   944→      px(ctx, jx - 2, pipeY - 5, 4, 1, '#8a8a8a')
+   945→    }
+   946→    // coolant vent glow (cyan dots at pipe ends)
+   947→    for (const vx of [40, W - 40]) {
+   948→      const cg = ctx.createRadialGradient(vx, pipeY - 4, 0, vx, pipeY - 4, 3)
+   949→      cg.addColorStop(0, '#c0f4ff')
+   950→      cg.addColorStop(0.5, '#00d0ff')
+   951→      cg.addColorStop(1, 'rgba(0,208,255,0)')
+   952→      ctx.fillStyle = cg
+   953→      ctx.fillRect(vx - 3, pipeY - 7, 6, 6)
+   954→      ctx.fillStyle = '#00d0ff'
+   955→      ctx.beginPath(); ctx.arc(vx, pipeY - 4, 0.8, 0, Math.PI * 2); ctx.fill()
+   956→    }
+   957→
+   958→    // --- Vertical slit windows (glowing cyan, 2 rows x 2 columns on sides) ---
+   959→    const winY1 = wallTop + 14
+   960→    const winY2 = wallTop + 26
+   961→    for (const wy of [winY1, winY2]) {
+   962→      for (const wx of [12, W - 16]) {
+   963→        rrect(ctx, wx, wy, 4, 6, 1, '#0080a0')
+   964→        rrect(ctx, wx, wy + 1, 4, 4, 1, '#00d0ff')
+   965→        px(ctx, wx, wy, 4, 1, '#80e8ff')
+   966→        // window frame
+   967→        px(ctx, wx - 1, wy - 1, 6, 1, '#1a1a1a')
+   968→        px(ctx, wx - 1, wy + 6, 6, 1, '#1a1a1a')
+   969→      }
+   970→    }
+   971→
+   972→    // --- Central blast door ---
+   973→    const doorW = W * 0.22
+   974→    const doorH = H * 0.26
+   975→    const doorX = W / 2 - doorW / 2
+   976→    const doorY = H - doorH - 3
+   977→    rrect(ctx, doorX - 2, doorY - 2, doorW + 4, doorH + 4, 2, '#1a1a1a')
+   978→    const doorGrad = ctx.createLinearGradient(0, doorY, 0, doorY + doorH)
+   979→    doorGrad.addColorStop(0, '#5a5a5a')
+   980→    doorGrad.addColorStop(0.6, '#3a3a3a')
+   981→    doorGrad.addColorStop(1, '#1a1a1a')
+   982→    rrect(ctx, doorX, doorY, doorW, doorH, 1, doorGrad as any)
+   983→    // door seam (vertical)
+   984→    px(ctx, W / 2, doorY, 1, doorH, '#0a0a0a')
+   985→    // door panel lines (horizontal)
+   986→    for (let i = 1; i < 4; i++) {
+   987→      px(ctx, doorX + 1, doorY + (doorH * i / 4), doorW - 2, 1, '#1a1a1a')
+   988→      px(ctx, doorX + 1, doorY + (doorH * i / 4) + 1, doorW - 2, 1, '#4a4a4a')
+   989→    }
+   990→    // hazard stripes at top
+   991→    const dhazN = 4
+   992→    for (let i = 0; i < dhazN; i++) {
+   993→      px(ctx, doorX + 1 + i * (doorW - 2) / dhazN, doorY + 2, (doorW - 2) / dhazN, 2, i % 2 === 0 ? '#ffaa30' : '#1a1a1a')
+   994→    }
+   995→    // door control panel (faction indicator)
+   996→    rrect(ctx, W / 2 - 3, doorY + doorH - 8, 6, 4, 1, '#1a1a1a')
+   997→    px(ctx, W / 2 - 2, doorY + doorH - 7, 4, 1, col.flag)
+   998→    px(ctx, W / 2 - 2, doorY + doorH - 5, 2, 1, col.trim)
+   999→
+  1000→    // --- Faction stripe (subtle accent along wall) ---
+  1001→    px(ctx, 8, wallTop + 6, W - 16, 1, col.primary)
+  1002→    px(ctx, 8, wallTop + 7, W - 16, 1, col.dark)
+  1003→
+  1004→    // --- Side external reinforcement pillars (angular buttresses) ---
+  1005→    for (const side of [0, 1]) {
+  1006→      const bx = side === 0 ? 6 : W - 11
+  1007→      rrect(ctx, bx, wallTop + 2, 5, wallBottom - wallTop - 4, 1, '#2a2a2a')
+  1008→      const bGrad = ctx.createLinearGradient(bx, 0, bx + 5, 0)
+  1009→      bGrad.addColorStop(0, '#5a5a5a')
+  1010→      bGrad.addColorStop(0.5, '#6a6a6a')
+  1011→      bGrad.addColorStop(1, '#2a2a2a')
+  1012→      rrect(ctx, bx + 1, wallTop + 3, 3, wallBottom - wallTop - 6, 1, bGrad as any)
+  1013→      // pillar rivets
+  1014→      for (let i = 0; i < 3; i++) {
+  1015→        const ry = wallTop + 8 + i * 12
+  1016→        px(ctx, bx + 1, ry, 3, 1, '#1a1a1a')
+  1017→      }
+  1018→    }
+  1019→
+  1020→    // --- Hazard line on ground (front of door) ---
+  1021→    for (let i = 0; i < 10; i++) {
+  1022→      px(ctx, doorX - 4 + i * 4, H - 4, 2, 1, i % 2 === 0 ? '#ffaa30' : '#1a1a1a')
+  1023→    }
+  1024→  } else if (type === 'factory') {
+  1025→    // ===== FACTORY (3x2 = 120x80): Wide industrial facility =====
+  1026→    // Flat sawtooth glass roof + 2 chimneys with heat vents + cargo bay door + pipes
+  1027→
+  1028→    // --- Main structure (wide metallic housing) ---
+  1029→    const wallTop = H * 0.44
+  1030→    const wallBottom = H - 4
+  1031→    rrect(ctx, 4, wallTop, W - 8, wallBottom - wallTop, 2, '#1a1a1a')
+  1032→    const wallGrad = ctx.createLinearGradient(0, wallTop, 0, wallBottom)
+  1033→    wallGrad.addColorStop(0, '#6a6a6a')
+  1034→    wallGrad.addColorStop(0.4, '#4a4a4a')
+  1035→    wallGrad.addColorStop(1, '#2a2a2a')
+  1036→    rrect(ctx, 6, wallTop + 1, W - 12, wallBottom - wallTop - 2, 1, wallGrad as any)
+  1037→    px(ctx, 6, wallTop + 1, W - 12, 1, '#8a8a8a')
+  1038→    // horizontal accent bands (panel divisions)
+  1039→    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.4, W - 12, 1, '#1a1a1a')
+  1040→    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.4 + 1, W - 12, 1, '#5a5a5a')
+  1041→    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.7, W - 12, 1, '#1a1a1a')
+  1042→    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.7 + 1, W - 12, 1, '#5a5a5a')
+  1043→
+  1044→    // --- Flat sawtooth roof (angular glass panels, NOT pitched) ---
+  1045→    const numSaw = 6
+  1046→    const sawW = (W - 12) / numSaw
+  1047→    const sawBaseY = wallTop + 2
+  1048→    const sawTopY = H * 0.28
+  1049→    for (let i = 0; i < numSaw; i++) {
+  1050→      const bx = 6 + i * sawW
+  1051→      // glass face (angled, dark blue-gray glass with cyan tint)
+  1052→      ctx.fillStyle = '#1a2a3a'
+  1053→      ctx.beginPath()
+  1054→      ctx.moveTo(bx, sawBaseY)
+  1055→      ctx.lineTo(bx + sawW * 0.6, sawTopY)
+  1056→      ctx.lineTo(bx + sawW, sawBaseY)
+  1057→      ctx.closePath()
+  1058→      ctx.fill()
+  1059→      // glass inner highlight (cyan tint gradient)
+  1060→      const glassGrad = ctx.createLinearGradient(bx, sawBaseY, bx, sawTopY)
+  1061→      glassGrad.addColorStop(0, '#1a2a3a')
+  1062→      glassGrad.addColorStop(0.7, '#3a5a7a')
+  1063→      glassGrad.addColorStop(1, '#5a8aaa')
+  1064→      ctx.fillStyle = glassGrad
+  1065→      ctx.beginPath()
+  1066→      ctx.moveTo(bx + 1, sawBaseY - 1)
+  1067→      ctx.lineTo(bx + sawW * 0.6 - 1, sawTopY + 1)
+  1068→      ctx.lineTo(bx + sawW - 1, sawBaseY - 1)
+  1069→      ctx.closePath()
+  1070→      ctx.fill()
+  1071→      // glazing bars (vertical lines on glass)
+  1072→      ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1
+  1073→      for (let g = 1; g < 3; g++) {
+  1074→        const gx2 = bx + (sawW * 0.6) * (g / 3)
+  1075→        ctx.beginPath()
+  1076→        ctx.moveTo(gx2, sawBaseY)
+  1077→        ctx.lineTo(gx2 + sawW * 0.6 * 0.2, sawTopY + (sawBaseY - sawTopY) * (1 - g / 3))
+  1078→        ctx.stroke()
+  1079→      }
+  1080→      // shadow face (right side — vertical drop)
+  1081→      ctx.fillStyle = '#2a2a2a'
+  1082→      ctx.beginPath()
+  1083→      ctx.moveTo(bx + sawW * 0.6, sawTopY)
+  1084→      ctx.lineTo(bx + sawW, sawTopY + (sawBaseY - sawTopY) * 0.3)
+  1085→      ctx.lineTo(bx + sawW, sawBaseY)
+  1086→      ctx.closePath()
+  1087→      ctx.fill()
+  1088→      // roof edge highlight
+  1089→      px(ctx, bx, sawBaseY, sawW, 1, '#1a1a1a')
+  1090→      // small cyan glow strip at peak (factory interior lights)
+  1091→      px(ctx, bx + sawW * 0.6 - 1, sawTopY, 2, 1, '#00d0ff')
+  1092→    }
+  1093→    // sawtooth ridge rail (dark)
+  1094→    ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1
+  1095→    ctx.beginPath()
+  1096→    for (let i = 0; i < numSaw; i++) {
+  1097→      const bx = 6 + i * sawW
+  1098→      if (i === 0) ctx.moveTo(bx, sawBaseY)
+  1099→      ctx.lineTo(bx + sawW * 0.6, sawTopY)
+  1100→      ctx.lineTo(bx + sawW, sawBaseY)
+  1101→    }
+  1102→    ctx.stroke()
+  1103→
+  1104→    // --- 2 industrial chimneys (metallic cylinders with heat vents) ---
+  1105→    const chimneys = [
+  1106→      { x: W - 38, h: H * 0.7 },
+  1107→      { x: W - 22, h: H * 0.8 },
+  1108→    ]
+  1109→    for (const ch of chimneys) {
+  1110→      const cyTop = H - ch.h - 4
+  1111→      // chimney outer
+  1112→      rrect(ctx, ch.x, cyTop, 8, ch.h, 1, '#1a1a1a')
+  1113→      // chimney metallic gradient
+  1114→      const chGrad = ctx.createLinearGradient(ch.x, 0, ch.x + 8, 0)
+  1115→      chGrad.addColorStop(0, '#2a2a2a')
+  1116→      chGrad.addColorStop(0.3, '#5a5a5a')
+  1117→      chGrad.addColorStop(0.6, '#4a4a4a')
+  1118→      chGrad.addColorStop(1, '#1a1a1a')
+  1119→      rrect(ctx, ch.x + 1, cyTop, 6, ch.h, 1, chGrad as any)
+  1120→      // chimney top lip (flared)
+  1121→      rrect(ctx, ch.x - 2, cyTop - 3, 12, 4, 1, '#1a1a1a')
+  1122→      rrect(ctx, ch.x - 1, cyTop - 2, 10, 2, 1, '#4a4a4a')
+  1123→      px(ctx, ch.x - 1, cyTop - 2, 10, 1, '#7a7a7a')
+  1124→      // chimney bands (reinforcement rings)
+  1125→      px(ctx, ch.x, cyTop + ch.h * 0.25, 8, 1, '#1a1a1a')
+  1126→      px(ctx, ch.x, cyTop + ch.h * 0.25 + 1, 8, 1, '#4a4a4a')
+  1127→      px(ctx, ch.x, cyTop + ch.h * 0.55, 8, 1, '#1a1a1a')
+  1128→      px(ctx, ch.x, cyTop + ch.h * 0.55 + 1, 8, 1, '#4a4a4a')
+  1129→      px(ctx, ch.x, cyTop + ch.h * 0.85, 8, 1, '#1a1a1a')
+  1130→      // heat vent glow (amber/orange — hot exhaust at top)
+  1131→      const ventGrad = ctx.createRadialGradient(ch.x + 4, cyTop - 4, 0, ch.x + 4, cyTop - 4, 6)
+  1132→      ventGrad.addColorStop(0, '#ffe080')
+  1133→      ventGrad.addColorStop(0.4, '#ff8030')
+  1134→      ventGrad.addColorStop(1, 'rgba(255,128,48,0)')
+  1135→      ctx.fillStyle = ventGrad
+  1136→      ctx.fillRect(ch.x - 2, cyTop - 10, 14, 10)
+  1137→      ctx.fillStyle = '#ffe080'
+  1138→      ctx.beginPath(); ctx.arc(ch.x + 4, cyTop - 4, 0.8, 0, Math.PI * 2); ctx.fill()
+  1139→      // chimney hot interior (orange Ring inside top)
+  1140→      px(ctx, ch.x + 2, cyTop + 1, 4, 1, '#ff6020')
+  1141→      px(ctx, ch.x + 3, cyTop + 1, 2, 1, '#ffa050')
+  1142→    }
+  1143→
+  1144→    // --- Large cargo bay door (left side, with hazard markings) ---
+  1145→    const gdX = 12
+  1146→    const gdW = W * 0.24
+  1147→    const gdH = H * 0.32
+  1148→    const gdY = H - gdH - 3
+  1149→    rrect(ctx, gdX - 2, gdY - 2, gdW + 4, gdH + 4, 2, '#1a1a1a')
+  1150→    const gdGrad = ctx.createLinearGradient(0, gdY, 0, gdY + gdH)
+  1151→    gdGrad.addColorStop(0, '#4a4a4a')
+  1152→    gdGrad.addColorStop(0.5, '#2a2a2a')
+  1153→    gdGrad.addColorStop(1, '#1a1a1a')
+  1154→    rrect(ctx, gdX, gdY, gdW, gdH, 1, gdGrad as any)
+  1155→    // door panel lines (roll-up segments — horizontal)
+  1156→    for (let i = 1; i < 6; i++) {
+  1157→      px(ctx, gdX + 1, gdY + (gdH * i / 6), gdW - 2, 1, '#0a0a0a')
+  1158→      px(ctx, gdX + 1, gdY + (gdH * i / 6) + 1, gdW - 2, 1, '#4a4a4a')
+  1159→    }
+  1160→    // door vertical seams (2 panels)
+  1161→    for (let i = 1; i < 3; i++) {
+  1162→      px(ctx, gdX + (gdW * i / 3), gdY, 1, gdH, '#0a0a0a')
+  1163→    }
+  1164→    // hazard stripes at bottom of door (yellow-black)
+  1165→    for (let i = 0; i < 8; i++) {
+  1166→      px(ctx, gdX + 1 + i * (gdW - 2) / 8, gdY + gdH - 5, (gdW - 2) / 8, 3, i % 2 === 0 ? '#ffd040' : '#1a1a1a')
+  1167→    }
+  1168→    // door warning label (faction indicator)
+  1169→    rrect(ctx, gdX + gdW / 2 - 4, gdY + gdH / 2 - 3, 8, 6, 1, '#0a0a0a')
+  1170→    px(ctx, gdX + gdW / 2 - 3, gdY + gdH / 2 - 2, 6, 1, col.flag)
+  1171→    px(ctx, gdX + gdW / 2 - 3, gdY + gdH / 2, 4, 1, col.flag)
+  1172→    px(ctx, gdX + gdW / 2 - 3, gdY + gdH / 2 + 2, 2, 1, col.flag)
+  1173→
+  1174→    // --- Control room window (above door, glowing cyan) ---
+  1175→    rrect(ctx, gdX + 4, gdY - 12, gdW - 8, 8, 1, '#1a1a1a')
+  1176→    const winGrad = ctx.createLinearGradient(0, gdY - 12, 0, gdY - 4)
+  1177→    winGrad.addColorStop(0, '#0080a0')
+  1178→    winGrad.addColorStop(0.5, '#00d0ff')
+  1179→    winGrad.addColorStop(1, '#0080a0')
+  1180→    rrect(ctx, gdX + 5, gdY - 11, gdW - 10, 6, 1, winGrad as any)
+  1181→    px(ctx, gdX + 5, gdY - 11, gdW - 10, 1, '#80e8ff')
+  1182→    // window dividers
+  1183→    for (let i = 1; i < 4; i++) {
+  1184→      px(ctx, gdX + 5 + (gdW - 10) * i / 4, gdY - 11, 1, 6, '#1a1a1a')
+  1185→    }
+  1186→
+  1187→    // --- External pipes and conduit (right of door) ---
+  1188→    const pipeY1 = H * 0.6
+  1189→    const pipeY2 = H * 0.5
+  1190→    ctx.strokeStyle = '#3a3a3a'; ctx.lineWidth = 3
+  1191→    ctx.beginPath()
+  1192→    ctx.moveTo(gdX + gdW + 6, pipeY1)
+  1193→    ctx.lineTo(gdX + gdW + 24, pipeY1)
+  1194→    ctx.lineTo(gdX + gdW + 24, pipeY2)
+  1195→    ctx.lineTo(W - 52, pipeY2)
+  1196→    ctx.stroke()
+  1197→    // pipe highlight
+  1198→    ctx.strokeStyle = '#6a6a6a'; ctx.lineWidth = 1
+  1199→    ctx.beginPath()
+  1200→    ctx.moveTo(gdX + gdW + 6, pipeY1 - 1)
+  1201→    ctx.lineTo(gdX + gdW + 24, pipeY1 - 1)
+  1202→    ctx.lineTo(gdX + gdW + 24, pipeY2 - 1)
+  1203→    ctx.stroke()
+  1204→    // second smaller conduit pipe
+  1205→    ctx.strokeStyle = '#4a4a4a'; ctx.lineWidth = 2
+  1206→    ctx.beginPath()
+  1207→    ctx.moveTo(gdX + gdW + 6, pipeY1 + 5)
+  1208→    ctx.lineTo(gdX + gdW + 30, pipeY1 + 5)
+  1209→    ctx.stroke()
+  1210→    // pipe joints (flanges)
+  1211→    for (const jx of [gdX + gdW + 24, W - 56]) {
+  1212→      rrect(ctx, jx - 2, pipeY2 - 3, 4, 6, 1, '#5a5a5a')
+  1213→      px(ctx, jx - 2, pipeY2 - 3, 4, 1, '#8a8a8a')
+  1214→    }
+  1215→    // valve wheels along pipe
+  1216→    for (const vx of [gdX + gdW + 14, W - 50]) {
+  1217→      ctx.fillStyle = '#3a3a3a'
+  1218→      ctx.beginPath(); ctx.arc(vx, pipeY1, 3.5, 0, Math.PI * 2); ctx.fill()
+  1219→      ctx.fillStyle = '#5a5a5a'
+  1220→      ctx.beginPath(); ctx.arc(vx, pipeY1, 2.5, 0, Math.PI * 2); ctx.fill()
+  1221→      ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1
+  1222→      for (let i = 0; i < 4; i++) {
+  1223→        const a = (i / 4) * Math.PI * 2
+  1224→        ctx.beginPath()
+  1225→        ctx.moveTo(vx, pipeY1)
+  1226→        ctx.lineTo(vx + Math.cos(a) * 3.5, pipeY1 + Math.sin(a) * 3.5)
+  1227→        ctx.stroke()
+  1228→      }
+  1229→      ctx.fillStyle = '#1a1a1a'
+  1230→      ctx.beginPath(); ctx.arc(vx, pipeY1, 1, 0, Math.PI * 2); ctx.fill()
+  1231→    }
+  1232→
+  1233→    // --- Side multi-pane windows (industrial, glowing cyan) ---
+  1234→    for (const wx of [W * 0.55, W * 0.7]) {
+  1235→      rrect(ctx, wx, wallTop + 8, 12, 10, 1, '#1a1a1a')
+  1236→      const swg = ctx.createLinearGradient(0, wallTop + 8, 0, wallTop + 18)
+  1237→      swg.addColorStop(0, '#0080a0')
+  1238→      swg.addColorStop(1, '#00d0ff')
+  1239→      rrect(ctx, wx + 1, wallTop + 9, 10, 8, 1, swg as any)
+  1240→      px(ctx, wx + 1, wallTop + 9, 10, 1, '#80e8ff')
+  1241→      // window dividers
+  1242→      px(ctx, wx + 5, wallTop + 9, 1, 8, '#1a1a1a')
+  1243→      px(ctx, wx + 1, wallTop + 13, 10, 1, '#1a1a1a')
+  1244→    }
+  1245→
+  1246→    // --- Loading ramp / hazard zone on ground ---
+  1247→    px(ctx, gdX - 4, H - 5, gdW + 8, 2, '#2a2a2a')
+  1248→    for (let i = 0; i < 10; i++) {
+  1249→      px(ctx, gdX - 2 + i * 4, H - 3, 2, 1, i % 2 === 0 ? '#ffd040' : '#1a1a1a')
+  1250→    }
+  1251→  } else if (type === 'turret') {
+  1252→    // ===== TURRET (1x1 = 40x40): Energy cannon on rotating base =====
+  1253→    const s = TILE_SIZE
+  1254→
+  1255→    // --- Angular hexagonal base pad (reinforced) ---
+  1256→    ctx.fillStyle = '#1a1a1a'
+  1257→    ctx.beginPath()
+  1258→    ctx.moveTo(s / 2 - 13, s - 8)
+  1259→    ctx.lineTo(s / 2 - 9, s - 4)
+  1260→    ctx.lineTo(s / 2 + 9, s - 4)
+  1261→    ctx.lineTo(s / 2 + 13, s - 8)
+  1262→    ctx.lineTo(s / 2 + 11, s - 12)
+  1263→    ctx.lineTo(s / 2 - 11, s - 12)
+  1264→    ctx.closePath()
+  1265→    ctx.fill()
+  1266→    const padGrad = ctx.createLinearGradient(0, s - 12, 0, s - 4)
+  1267→    padGrad.addColorStop(0, '#6a6a6a')
+  1268→    padGrad.addColorStop(1, '#2a2a2a')
+  1269→    ctx.fillStyle = padGrad
+  1270→    ctx.beginPath()
+  1271→    ctx.moveTo(s / 2 - 12, s - 8)
+  1272→    ctx.lineTo(s / 2 - 9, s - 5)
+  1273→    ctx.lineTo(s / 2 + 9, s - 5)
+  1274→    ctx.lineTo(s / 2 + 12, s - 8)
+  1275→    ctx.lineTo(s / 2 + 10, s - 11)
+  1276→    ctx.lineTo(s / 2 - 10, s - 11)
+  1277→    ctx.closePath()
+  1278→    ctx.fill()
+  1279→    px(ctx, s / 2 - 10, s - 11, 20, 1, '#8a8a8a')
+  1280→    // base rivets
+  1281→    for (const rx of [s / 2 - 7, s / 2 + 7]) {
+  1282→      ctx.fillStyle = '#1a1a1a'
+  1283→      ctx.beginPath(); ctx.arc(rx, s - 7, 0.8, 0, Math.PI * 2); ctx.fill()
+  1284→    }
+  1285→
+  1286→    // --- Rotating turret base (angular box) ---
+  1287→    rrect(ctx, s / 2 - 9, s - 22, 18, 11, 1, '#1a1a1a')
+  1288→    const tGrad = ctx.createLinearGradient(0, s - 22, 0, s - 11)
+  1289→    tGrad.addColorStop(0, '#7a7a7a')
+  1290→    tGrad.addColorStop(0.5, '#5a5a5a')
+  1291→    tGrad.addColorStop(1, '#2a2a2a')
+  1292→    rrect(ctx, s / 2 - 8, s - 21, 16, 9, 1, tGrad as any)
+  1293→    px(ctx, s / 2 - 8, s - 21, 16, 1, '#9a9a9a')
+  1294→    // vertical panel seams
+  1295→    px(ctx, s / 2 - 3, s - 21, 1, 9, '#1a1a1a')
+  1296→    px(ctx, s / 2 + 3, s - 21, 1, 9, '#1a1a1a')
+  1297→
+  1298→    // --- Energy cannon housing (raised mantlet) ---
+  1299→    rrect(ctx, s / 2 - 5, s - 28, 10, 7, 1, '#1a1a1a')
+  1300→    const mGrad = ctx.createLinearGradient(0, s - 28, 0, s - 21)
+  1301→    mGrad.addColorStop(0, '#6a6a6a')
+  1302→    mGrad.addColorStop(1, '#3a3a3a')
+  1303→    rrect(ctx, s / 2 - 4, s - 27, 8, 5, 1, mGrad as any)
+  1304→    px(ctx, s / 2 - 4, s - 27, 8, 1, '#8a8a8a')
+  1305→
+  1306→    // --- Energy cannon barrel (sleek, with glowing core) ---
+  1307→    px(ctx, s / 2 - 1, s - 33, 3, 7, '#1a1a1a')
+  1308→    px(ctx, s / 2, s - 33, 1, 7, '#4a4a4a')
+  1309→    // barrel muzzle ring
+  1310→    px(ctx, s / 2 - 2, s - 33, 5, 1, '#3a3a3a')
+  1311→    px(ctx, s / 2 - 2, s - 34, 5, 1, '#5a5a5a')
+  1312→
+  1313→    // --- Glowing power cell at base of barrel (cyan) ---
+  1314→    const cellGrad = ctx.createRadialGradient(s / 2, s - 25, 0, s / 2, s - 25, 4)
+  1315→    cellGrad.addColorStop(0, '#c0f4ff')
+  1316→    cellGrad.addColorStop(0.4, '#00d0ff')
+  1317→    cellGrad.addColorStop(1, 'rgba(0,208,255,0)')
+  1318→    ctx.fillStyle = cellGrad
+  1319→    ctx.fillRect(s / 2 - 4, s - 29, 8, 8)
+  1320→    ctx.fillStyle = '#00d0ff'
+  1321→    rrect(ctx, s / 2 - 2, s - 27, 5, 3, 1, '#00d0ff')
+  1322→    px(ctx, s / 2 - 2, s - 27, 5, 1, '#80e8ff')
+  1323→
+  1324→    // --- Muzzle glow (charging tip) ---
+  1325→    const muzzleGrad = ctx.createRadialGradient(s / 2, s - 33, 0, s / 2, s - 33, 4)
+  1326→    muzzleGrad.addColorStop(0, '#c0f4ff')
+  1327→    muzzleGrad.addColorStop(0.5, '#00d0ff')
+  1328→    muzzleGrad.addColorStop(1, 'rgba(0,208,255,0)')
+  1329→    ctx.fillStyle = muzzleGrad
+  1330→    ctx.fillRect(s / 2 - 4, s - 37, 8, 8)
+  1331→
+  1332→    // --- Faction emblem (on turret side) ---
+  1333→    ctx.fillStyle = col.flag
+  1334→    ctx.beginPath(); ctx.arc(s / 2, s - 16, 1.5, 0, Math.PI * 2); ctx.fill()
+  1335→    px(ctx, s / 2, s - 16, 1, 1, col.trim)
+  1336→
+  1337→    // --- Side status lights (amber) ---
+  1338→    for (const lx of [s / 2 - 6, s / 2 + 5]) {
+  1339→      ctx.fillStyle = '#ffaa30'
+  1340→      ctx.beginPath(); ctx.arc(lx, s - 14, 0.7, 0, Math.PI * 2); ctx.fill()
+  1341→    }
+  1342→  } else if (type === 'refinery') {
+  1343→    // ===== REFINERY (2x2 = 80x80): Spice processing plant =====
+  1344→    // Large cylindrical processing tank with orange glow + pipes + vats + valves
+  1345→
+  1346→    // --- Lower processing structure (industrial chemical plant base) ---
+  1347→    const wallTop = H * 0.52
+  1348→    const wallBottom = H - 4
+  1349→    rrect(ctx, 4, wallTop, W - 8, wallBottom - wallTop, 2, '#1a1a1a')
+  1350→    const wallGrad = ctx.createLinearGradient(0, wallTop, 0, wallBottom)
+  1351→    wallGrad.addColorStop(0, '#5a5a5a')
+  1352→    wallGrad.addColorStop(0.4, '#3a3a3a')
+  1353→    wallGrad.addColorStop(1, '#2a2a2a')
+  1354→    rrect(ctx, 6, wallTop + 1, W - 12, wallBottom - wallTop - 2, 1, wallGrad as any)
+  1355→    px(ctx, 6, wallTop + 1, W - 12, 1, '#7a7a7a')
+  1356→    // panel divisions
+  1357→    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.4, W - 12, 1, '#1a1a1a')
+  1358→    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.4 + 1, W - 12, 1, '#5a5a5a')
+  1359→    // faction accent stripe (subtle)
+  1360→    px(ctx, 6, wallTop + 6, W - 12, 1, col.primary)
+  1361→    px(ctx, 6, wallTop + 7, W - 12, 1, col.dark)
+  1362→
+  1363→    // --- Large central cylindrical processing tank (with spice glow) ---
+  1364→    const tankR = W * 0.18
+  1365→    const tankX = W / 2
+  1366→    const tankBottomY = wallTop + 2
+  1367→    const tankTopY = H * 0.18
+  1368→    const tankH = tankBottomY - tankTopY
+  1369→    // tank outer shell (dark)
+  1370→    rrect(ctx, tankX - tankR, tankTopY, tankR * 2, tankH, 2, '#1a1a1a')
+  1371→    // tank metallic body with horizontal gradient
+  1372→    const tankGrad = ctx.createLinearGradient(tankX - tankR, 0, tankX + tankR, 0)
+  1373→    tankGrad.addColorStop(0, '#2a2a2a')
+  1374→    tankGrad.addColorStop(0.25, '#5a5a5a')
+  1375→    tankGrad.addColorStop(0.5, '#6a6a6a')
+  1376→    tankGrad.addColorStop(0.75, '#4a4a4a')
+  1377→    tankGrad.addColorStop(1, '#1a1a1a')
+  1378→    rrect(ctx, tankX - tankR + 1, tankTopY + 1, tankR * 2 - 2, tankH - 2, 1, tankGrad as any)
+  1379→    // tank top rim (reinforced)
+  1380→    rrect(ctx, tankX - tankR - 2, tankTopY - 3, tankR * 2 + 4, 5, 1, '#1a1a1a')
+  1381→    rrect(ctx, tankX - tankR - 1, tankTopY - 2, tankR * 2 + 2, 3, 1, '#5a5a5a')
+  1382→    px(ctx, tankX - tankR - 1, tankTopY - 2, tankR * 2 + 2, 1, '#8a8a8a')
+  1383→    // tank band rivets (reinforcement rings)
+  1384→    for (const ry of [tankTopY + tankH * 0.3, tankTopY + tankH * 0.6]) {
+  1385→      px(ctx, tankX - tankR, ry, tankR * 2, 1, '#1a1a1a')
+  1386→      px(ctx, tankX - tankR, ry + 1, tankR * 2, 1, '#5a5a5a')
+  1387→      for (let i = 0; i < 5; i++) {
+  1388→        const rx = tankX - tankR + 3 + i * (tankR * 2 - 6) / 4
+  1389→        px(ctx, rx, ry + 1, 1, 1, '#1a1a1a')
+  1390→      }
+  1391→    }
+  1392→
+  1393→    // --- Spice glow viewports (translucent orange windows) ---
+  1394→    for (const vy of [tankTopY + tankH * 0.45, tankTopY + tankH * 0.75]) {
+  1395→      const vpGrad = ctx.createLinearGradient(0, vy, 0, vy + 6)
+  1396→      vpGrad.addColorStop(0, '#ff8030')
+  1397→      vpGrad.addColorStop(0.5, '#ffa050')
+  1398→      vpGrad.addColorStop(1, '#ff6020')
+  1399→      rrect(ctx, tankX - tankR * 0.55, vy, tankR * 1.1, 6, 1, '#1a1a1a')
+  1400→      rrect(ctx, tankX - tankR * 0.55 + 1, vy + 1, tankR * 1.1 - 2, 4, 1, vpGrad as any)
+  1401→      px(ctx, tankX - tankR * 0.55 + 1, vy + 1, tankR * 1.1 - 2, 1, '#ffc070')
+  1402→      // viewport dividers
+  1403→      for (let i = 1; i < 3; i++) {
+  1404→        px(ctx, tankX - tankR * 0.55 + (tankR * 1.1 - 2) * i / 3, vy + 1, 1, 4, '#1a1a1a')
+  1405→      }
+  1406→    }
+  1407→    // spice glow halo (around tank top)
+  1408→    const spiceGlow = ctx.createRadialGradient(tankX, tankTopY + 4, 0, tankX, tankTopY + 4, tankR + 4)
+  1409→    spiceGlow.addColorStop(0, 'rgba(255,128,48,0.4)')
+  1410→    spiceGlow.addColorStop(1, 'rgba(255,128,48,0)')
+  1411→    ctx.fillStyle = spiceGlow
+  1412→    ctx.fillRect(tankX - tankR - 4, tankTopY - 4, tankR * 2 + 8, 16)
+  1413→
+  1414→    // --- Tank top valve/outlet assembly ---
+  1415→    rrect(ctx, tankX - 4, tankTopY - 7, 8, 4, 1, '#1a1a1a')
+  1416→    rrect(ctx, tankX - 3, tankTopY - 6, 6, 2, 1, '#5a5a5a')
+  1417→    px(ctx, tankX - 3, tankTopY - 6, 6, 1, '#7a7a7a')
+  1418→    // outlet pipe (rising)
+  1419→    px(ctx, tankX - 1, tankTopY - 12, 2, 6, '#3a3a3a')
+  1420→    px(ctx, tankX - 1, tankTopY - 12, 1, 6, '#5a5a5a')
+  1421→    // top vent glow (spice fumes — orange)
+  1422→    const ventGrad = ctx.createRadialGradient(tankX, tankTopY - 12, 0, tankX, tankTopY - 12, 5)
+  1423→    ventGrad.addColorStop(0, '#ffc070')
+  1424→    ventGrad.addColorStop(0.4, '#ff8030')
+  1425→    ventGrad.addColorStop(1, 'rgba(255,128,48,0)')
+  1426→    ctx.fillStyle = ventGrad
+  1427→    ctx.fillRect(tankX - 5, tankTopY - 17, 10, 10)
+  1428→
+  1429→    // --- Side crystallization vats (smaller cylinders, with spice glow) ---
+  1430→    const vatTopY = tankTopY + tankH * 0.15
+  1431→    const vatH = tankH * 0.7
+  1432→    for (const side of [0, 1]) {
+  1433→      const vx = side === 0 ? 8 : W - 18
+  1434→      rrect(ctx, vx, vatTopY, 10, vatH, 1, '#1a1a1a')
+  1435→      const vatGrad = ctx.createLinearGradient(vx, 0, vx + 10, 0)
+  1436→      vatGrad.addColorStop(0, '#3a3a3a')
+  1437→      vatGrad.addColorStop(0.5, '#5a5a5a')
+  1438→      vatGrad.addColorStop(1, '#1a1a1a')
+  1439→      rrect(ctx, vx + 1, vatTopY + 1, 8, vatH - 2, 1, vatGrad as any)
+  1440→      // vat spice glow viewport
+  1441→      const vsg = ctx.createLinearGradient(0, vatTopY + vatH * 0.3, 0, vatTopY + vatH * 0.7)
+  1442→      vsg.addColorStop(0, '#ff6020')
+  1443→      vsg.addColorStop(1, '#ffa050')
+  1444→      rrect(ctx, vx + 2, vatTopY + vatH * 0.3, 6, vatH * 0.4, 1, vsg as any)
+  1445→      px(ctx, vx + 2, vatTopY + vatH * 0.3, 6, 1, '#ffc070')
+  1446→      // vat top rim
+  1447→      rrect(ctx, vx - 1, vatTopY - 1, 12, 3, 1, '#1a1a1a')
+  1448→      px(ctx, vx - 1, vatTopY - 1, 12, 1, '#5a5a5a')
+  1449→    }
+  1450→
+  1451→    // --- Connecting pipes (from main tank to vats) ---
+  1452→    ctx.strokeStyle = '#3a3a3a'; ctx.lineWidth = 3
+  1453→    // left pipe
+  1454→    ctx.beginPath()
+  1455→    ctx.moveTo(tankX - tankR, tankTopY + tankH * 0.5)
+  1456→    ctx.lineTo(18, tankTopY + tankH * 0.5)
+  1457→    ctx.stroke()
+  1458→    // right pipe
+  1459→    ctx.beginPath()
+  1460→    ctx.moveTo(tankX + tankR, tankTopY + tankH * 0.5)
+  1461→    ctx.lineTo(W - 18, tankTopY + tankH * 0.5)
+  1462→    ctx.stroke()
+  1463→    // pipe highlights
+  1464→    ctx.strokeStyle = '#6a6a6a'; ctx.lineWidth = 1
+  1465→    ctx.beginPath()
+  1466→    ctx.moveTo(tankX - tankR, tankTopY + tankH * 0.5 - 1)
+  1467→    ctx.lineTo(18, tankTopY + tankH * 0.5 - 1)
+  1468→    ctx.moveTo(tankX + tankR, tankTopY + tankH * 0.5 - 1)
+  1469→    ctx.lineTo(W - 18, tankTopY + tankH * 0.5 - 1)
+  1470→    ctx.stroke()
+  1471→    // pipe elbows (flanges)
+  1472→    for (const jx of [18, W - 18]) {
+  1473→      rrect(ctx, jx - 2, tankTopY + tankH * 0.5 - 3, 4, 6, 1, '#5a5a5a')
+  1474→      px(ctx, jx - 2, tankTopY + tankH * 0.5 - 3, 4, 1, '#8a8a8a')
+  1475→    }
+  1476→
+  1477→    // --- Valve array (2 large wheels on lower structure) ---
+  1478→    for (const vx of [14, W - 14]) {
+  1479→      const vy = H * 0.78
+  1480→      ctx.fillStyle = '#3a3a3a'
+  1481→      ctx.beginPath(); ctx.arc(vx, vy, 5, 0, Math.PI * 2); ctx.fill()
+  1482→      ctx.fillStyle = '#5a5a5a'
+  1483→      ctx.beginPath(); ctx.arc(vx, vy, 4, 0, Math.PI * 2); ctx.fill()
+  1484→      ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1
+  1485→      for (let i = 0; i < 4; i++) {
+  1486→        const a = (i / 4) * Math.PI * 2
+  1487→        ctx.beginPath()
+  1488→        ctx.moveTo(vx, vy)
+  1489→        ctx.lineTo(vx + Math.cos(a) * 4, vy + Math.sin(a) * 4)
+  1490→        ctx.stroke()
+  1491→      }
+  1492→      ctx.fillStyle = '#1a1a1a'
+  1493→      ctx.beginPath(); ctx.arc(vx, vy, 1.5, 0, Math.PI * 2); ctx.fill()
+  1494→      // valve center glow (spice)
+  1495→      ctx.fillStyle = '#ff8030'
+  1496→      ctx.beginPath(); ctx.arc(vx, vy, 0.8, 0, Math.PI * 2); ctx.fill()
+  1497→    }
+  1498→
+  1499→    // --- Spice glow windows on lower structure ---
+  1500→    for (const wx of [12, W - 16]) {
+  1501→      const sg = ctx.createLinearGradient(0, H * 0.62, 0, H * 0.7)
+  1502→      sg.addColorStop(0, '#ff6020')
+  1503→      sg.addColorStop(1, '#ffa050')
+  1504→      rrect(ctx, wx, H * 0.62, 6, 8, 1, '#1a1a1a')
+  1505→      rrect(ctx, wx + 1, H * 0.62 + 1, 4, 6, 1, sg as any)
+  1506→      px(ctx, wx + 1, H * 0.62 + 1, 4, 1, '#ffc070')
+  1507→    }
+  1508→
+  1509→    // --- Central access door ---
+  1510→    rrect(ctx, W / 2 - 5, H - 13, 10, 10, 1, '#1a1a1a')
+  1511→    const dGrad = ctx.createLinearGradient(0, H - 13, 0, H - 3)
+  1512→    dGrad.addColorStop(0, '#4a4a4a')
+  1513→    dGrad.addColorStop(1, '#1a1a1a')
+  1514→    rrect(ctx, W / 2 - 4, H - 12, 8, 9, 1, dGrad as any)
+  1515→    px(ctx, W / 2, H - 12, 1, 9, '#0a0a0a')
+  1516→    // hazard stripes at door base
+  1517→    for (let i = 0; i < 4; i++) {
+  1518→      px(ctx, W / 2 - 4 + i * 2, H - 4, 2, 1, i % 2 === 0 ? '#ffd040' : '#1a1a1a')
+  1519→    }
+  1520→
+  1521→    // --- Spice stain spill (orange on ground) ---
+  1522→    ctx.fillStyle = 'rgba(232, 93, 47, 0.5)'
+  1523→    ctx.beginPath(); ctx.ellipse(W / 2 + 12, H - 3, 10, 2.5, 0, 0, Math.PI * 2); ctx.fill()
+  1524→    ctx.fillStyle = 'rgba(255, 150, 80, 0.4)'
+  1525→    ctx.beginPath(); ctx.ellipse(W / 2 + 10, H - 3, 5, 1.5, 0, 0, Math.PI * 2); ctx.fill()
+  1526→    // spice crystal specks (glowing)
+  1527→    for (let i = 0; i < 6; i++) {
+  1528→      const sx2 = W / 2 + 6 + rng() * 14
+  1529→      const sy2 = H - 4 + rng() * 2
+  1530→      ctx.fillStyle = rng() > 0.5 ? '#ff8030' : '#ffc070'
+  1531→      ctx.fillRect(sx2, sy2, 1, 1)
+  1532→    }
+  1533→  } else if (type === 'generator') {
+  1534→    // ===== GENERATOR (2x2 = 80x80): Power plant with vertical plasma core =====
+  1535→    // Bright cyan plasma + cooling fins + lightning arcs + energy conduit
+  1536→
+  1537→    // --- Main reactor housing ---
+  1538→    const wallTop = H * 0.4
+  1539→    const wallBottom = H - 4
+  1540→    rrect(ctx, 4, wallTop, W - 8, wallBottom - wallTop, 2, '#1a1a1a')
+  1541→    const wallGrad = ctx.createLinearGradient(0, wallTop, 0, wallBottom)
+  1542→    wallGrad.addColorStop(0, '#5a5a5a')
+  1543→    wallGrad.addColorStop(0.4, '#3a3a3a')
+  1544→    wallGrad.addColorStop(1, '#2a2a2a')
+  1545→    rrect(ctx, 6, wallTop + 1, W - 12, wallBottom - wallTop - 2, 1, wallGrad as any)
+  1546→    px(ctx, 6, wallTop + 1, W - 12, 1, '#7a7a7a')
+  1547→    // panel divisions
+  1548→    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.55, W - 12, 1, '#1a1a1a')
+  1549→    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.55 + 1, W - 12, 1, '#5a5a5a')
+  1550→
+  1551→    // --- Vertical cooling fins (left and right radiator stacks) ---
+  1552→    for (const side of [0, 1]) {
+  1553→      const fx = side === 0 ? 8 : W - 14
+  1554→      rrect(ctx, fx, wallTop + 4, 6, wallBottom - wallTop - 8, 1, '#1a1a1a')
+  1555→      const fGrad = ctx.createLinearGradient(fx, 0, fx + 6, 0)
+  1556→      fGrad.addColorStop(0, '#3a3a3a')
+  1557→      fGrad.addColorStop(0.5, '#5a5a5a')
+  1558→      fGrad.addColorStop(1, '#1a1a1a')
+  1559→      rrect(ctx, fx + 1, wallTop + 5, 4, wallBottom - wallTop - 10, 1, fGrad as any)
+  1560→      // fin slits (vertical radiator lines)
+  1561→      for (let i = 0; i < 10; i++) {
+  1562→        const fy = wallTop + 6 + i * ((wallBottom - wallTop - 14) / 9)
+  1563→        px(ctx, fx, fy, 6, 1, '#1a1a1a')
+  1564→        px(ctx, fx, fy + 1, 6, 1, '#4a4a4a')
+  1565→      }
+  1566→      // top cap (with vent glow)
+  1567→      rrect(ctx, fx - 1, wallTop + 1, 8, 4, 1, '#1a1a1a')
+  1568→      rrect(ctx, fx, wallTop + 2, 6, 2, 1, '#4a4a4a')
+  1569→      // top vent glow (cyan heat exhaust)
+  1570→      const vg = ctx.createRadialGradient(fx + 3, wallTop + 1, 0, fx + 3, wallTop + 1, 4)
+  1571→      vg.addColorStop(0, '#c0f4ff')
+  1572→      vg.addColorStop(0.4, '#00d0ff')
+  1573→      vg.addColorStop(1, 'rgba(0,208,255,0)')
+  1574→      ctx.fillStyle = vg
+  1575→      ctx.fillRect(fx - 1, wallTop - 3, 8, 6)
+  1576→      ctx.fillStyle = '#00d0ff'
+  1577→      ctx.beginPath(); ctx.arc(fx + 3, wallTop + 1, 0.8, 0, Math.PI * 2); ctx.fill()
+  1578→    }
+  1579→
+  1580→    // --- Top vent assembly (horizontal slats) ---
+  1581→    rrect(ctx, W * 0.22, wallTop - 4, W * 0.56, 6, 1, '#1a1a1a')
+  1582→    rrect(ctx, W * 0.22 + 1, wallTop - 3, W * 0.56 - 2, 4, 1, '#4a4a4a')
+  1583→    px(ctx, W * 0.22 + 1, wallTop - 3, W * 0.56 - 2, 1, '#6a6a6a')
+  1584→    for (let i = 0; i < 7; i++) {
+  1585→      const vx = W * 0.22 + 2 + i * ((W * 0.56 - 4) / 7)
+  1586→      px(ctx, vx, wallTop - 2, 4, 1, '#2a2a2a')
+  1587→      px(ctx, vx, wallTop, 4, 1, '#5a5a5a')
+  1588→    }
+  1589→
+  1590→    // --- Central vertical plasma core (bright cyan glow through containment) ---
+  1591→    const coreX = W / 2
+  1592→    const coreY = wallTop + (wallBottom - wallTop) * 0.5
+  1593→    const coreR = W * 0.2
+  1594→
+  1595→    // outer plasma halo (large soft glow)
+  1596→    const haloGrad = ctx.createRadialGradient(coreX, coreY, 0, coreX, coreY, coreR + 12)
+  1597→    haloGrad.addColorStop(0, 'rgba(0,208,255,0.7)')
+  1598→    haloGrad.addColorStop(0.5, 'rgba(0,128,160,0.4)')
+  1599→    haloGrad.addColorStop(1, 'rgba(0,128,160,0)')
+  1600→    ctx.fillStyle = haloGrad
+  1601→    ctx.fillRect(coreX - coreR - 12, coreY - coreR - 12, (coreR + 12) * 2, (coreR + 12) * 2)
+  1602→
+  1603→    // core containment ring (mechanical housing)
+  1604→    ctx.fillStyle = '#1a1a1a'
+  1605→    ctx.beginPath(); ctx.arc(coreX, coreY, coreR * 0.9, 0, Math.PI * 2); ctx.fill()
+  1606→    ctx.strokeStyle = '#5a5a5a'; ctx.lineWidth = 3
+  1607→    ctx.beginPath(); ctx.arc(coreX, coreY, coreR * 0.85, 0, Math.PI * 2); ctx.stroke()
+  1608→    ctx.strokeStyle = '#7a7a7a'; ctx.lineWidth = 1
+  1609→    ctx.beginPath(); ctx.arc(coreX, coreY, coreR * 0.85, 0, Math.PI * 2); ctx.stroke()
+  1610→    // ring bolt mounts (8 around)
+  1611→    for (let i = 0; i < 8; i++) {
+  1612→      const a = (i / 8) * Math.PI * 2
+  1613→      const bx = coreX + Math.cos(a) * coreR * 0.85
+  1614→      const by = coreY + Math.sin(a) * coreR * 0.85
+  1615→      ctx.fillStyle = '#3a3a3a'
+  1616→      ctx.beginPath(); ctx.arc(bx, by, 2, 0, Math.PI * 2); ctx.fill()
+  1617→      px(ctx, bx, by, 1, 1, '#1a1a1a')
+  1618→    }
+  1619→
+  1620→    // core plasma (bright cyan radial gradient)
+  1621→    const plasmaGrad = ctx.createRadialGradient(coreX, coreY, 0, coreX, coreY, coreR * 0.7)
+  1622→    plasmaGrad.addColorStop(0, '#ffffff')
+  1623→    plasmaGrad.addColorStop(0.2, '#c0f4ff')
+  1624→    plasmaGrad.addColorStop(0.5, '#00d0ff')
+  1625→    plasmaGrad.addColorStop(0.85, '#0080a0')
+  1626→    plasmaGrad.addColorStop(1, 'rgba(0,128,160,0)')
+  1627→    ctx.fillStyle = plasmaGrad
+  1628→    ctx.beginPath(); ctx.arc(coreX, coreY, coreR * 0.7, 0, Math.PI * 2); ctx.fill()
+  1629→    // plasma bright center
+  1630→    ctx.fillStyle = '#ffffff'
+  1631→    ctx.beginPath(); ctx.arc(coreX, coreY, coreR * 0.18, 0, Math.PI * 2); ctx.fill()
+  1632→
+  1633→    // containment vertical bars (cyan grid over plasma)
+  1634→    ctx.strokeStyle = 'rgba(0,208,255,0.6)'; ctx.lineWidth = 1
+  1635→    for (let i = -2; i <= 2; i++) {
+  1636→      const cx2 = coreX + i * (coreR * 0.7 / 2.5)
+  1637→      const dy = Math.sqrt(Math.max(0, (coreR * 0.7) ** 2 - (cx2 - coreX) ** 2))
+  1638→      ctx.beginPath()
+  1639→      ctx.moveTo(cx2, coreY - dy)
+  1640→      ctx.lineTo(cx2, coreY + dy)
+  1641→      ctx.stroke()
+  1642→    }
+  1643→
+  1644→    // --- Lightning arcs (4 directions from core, cyan) ---
+  1645→    ctx.strokeStyle = '#c0f4ff'; ctx.lineWidth = 1.5
+  1646→    ctx.lineCap = 'round'
+  1647→    // top arc to pylon
+  1648→    ctx.beginPath()
+  1649→    ctx.moveTo(coreX, coreY - coreR * 0.85)
+  1650→    ctx.lineTo(coreX - 3, coreY - coreR * 1.05)
+  1651→    ctx.lineTo(coreX + 2, coreY - coreR * 1.2)
+  1652→    ctx.lineTo(coreX - 1, coreY - coreR * 1.35)
+  1653→    ctx.stroke()
+  1654→    // left arc
+  1655→    ctx.beginPath()
+  1656→    ctx.moveTo(coreX - coreR * 0.85, coreY)
+  1657→    ctx.lineTo(coreX - coreR * 1.05, coreY - 3)
+  1658→    ctx.lineTo(coreX - coreR * 1.2, coreY + 2)
+  1659→    ctx.lineTo(coreX - coreR * 1.3, coreY - 1)
+  1660→    ctx.stroke()
+  1661→    // right arc
+  1662→    ctx.beginPath()
+  1663→    ctx.moveTo(coreX + coreR * 0.85, coreY)
+  1664→    ctx.lineTo(coreX + coreR * 1.05, coreY + 3)
+  1665→    ctx.lineTo(coreX + coreR * 1.2, coreY - 2)
+  1666→    ctx.lineTo(coreX + coreR * 1.3, coreY + 1)
+  1667→    ctx.stroke()
+  1668→    // bottom arc
+  1669→    ctx.beginPath()
+  1670→    ctx.moveTo(coreX, coreY + coreR * 0.85)
+  1671→    ctx.lineTo(coreX + 3, coreY + coreR * 1.0)
+  1672→    ctx.lineTo(coreX - 2, coreY + coreR * 1.15)
+  1673→    ctx.stroke()
+  1674→    ctx.lineCap = 'butt'
+  1675→
+  1676→    // --- Energy pylon / antenna (top, conducting power up) ---
+  1677→    const pylonX = coreX
+  1678→    const pylonTopY = H * 0.05
+  1679→    px(ctx, pylonX - 1, pylonTopY, 2, wallTop - 4 - pylonTopY, '#3a3a3a')
+  1680→    px(ctx, pylonX - 1, pylonTopY, 1, wallTop - 4 - pylonTopY, '#5a5a5a')
+  1681→    // pylon crossbars
+  1682→    px(ctx, pylonX - 3, pylonTopY + 6, 6, 1, '#4a4a4a')
+  1683→    px(ctx, pylonX - 2, pylonTopY + 12, 4, 1, '#4a4a4a')
+  1684→    // pylon ceramic insulators
+  1685→    for (const iy of [pylonTopY + 8, pylonTopY + 14, pylonTopY + 20]) {
+  1686→      rrect(ctx, pylonX - 2, iy, 4, 2, 1, '#d0d0d0')
+  1687→      px(ctx, pylonX - 2, iy, 4, 1, '#ffffff')
+  1688→    }
+  1689→    // pylon tip glow (cyan, charging)
+  1690→    const tipGrad = ctx.createRadialGradient(pylonX, pylonTopY, 0, pylonX, pylonTopY, 6)
+  1691→    tipGrad.addColorStop(0, '#c0f4ff')
+  1692→    tipGrad.addColorStop(0.4, '#00d0ff')
+  1693→    tipGrad.addColorStop(1, 'rgba(0,208,255,0)')
+  1694→    ctx.fillStyle = tipGrad
+  1695→    ctx.fillRect(pylonX - 6, pylonTopY - 6, 12, 12)
+  1696→    ctx.fillStyle = '#ffffff'
+  1697→    ctx.beginPath(); ctx.arc(pylonX, pylonTopY, 1.5, 0, Math.PI * 2); ctx.fill()
+  1698→
+  1699→    // --- Energy conduit LEDs along the bottom (cyan) ---
+  1700→    for (let i = 0; i < 5; i++) {
+  1701→      const lx = 22 + i * (W - 44) / 4
+  1702→      const lg = ctx.createRadialGradient(lx, H - 7, 0, lx, H - 7, 3)
+  1703→      lg.addColorStop(0, '#c0f4ff')
+  1704→      lg.addColorStop(0.4, '#00d0ff')
+  1705→      lg.addColorStop(1, 'rgba(0,208,255,0)')
+  1706→      ctx.fillStyle = lg
+  1707→      ctx.fillRect(lx - 3, H - 10, 6, 6)
+  1708→      ctx.fillStyle = '#00d0ff'
+  1709→      ctx.beginPath(); ctx.arc(lx, H - 7, 1.2, 0, Math.PI * 2); ctx.fill()
+  1710→      ctx.fillStyle = '#ffffff'
+  1711→      ctx.beginPath(); ctx.arc(lx, H - 7, 0.4, 0, Math.PI * 2); ctx.fill()
+  1712→    }
+  1713→
+  1714→    // --- Status display panels (glowing cyan/amber) ---
+  1715→    rrect(ctx, 16, wallTop + 8, 8, 5, 1, '#1a1a1a')
+  1716→    px(ctx, 17, wallTop + 9, 6, 1, '#00d0ff')
+  1717→    px(ctx, 17, wallTop + 11, 4, 1, '#00d0ff')
+  1718→    rrect(ctx, W - 24, wallTop + 8, 8, 5, 1, '#1a1a1a')
+  1719→    px(ctx, W - 23, wallTop + 9, 6, 1, '#00d0ff')
+  1720→    px(ctx, W - 23, wallTop + 11, 4, 1, '#ffaa30')
+  1721→
+  1722→    // --- Faction accent stripe ---
+  1723→    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.85, W - 12, 1, col.primary)
+  1724→    px(ctx, 6, wallTop + (wallBottom - wallTop) * 0.85 + 1, W - 12, 1, col.dark)
+  1725→
+  1726→    // base shadow strip
+  1727→    ctx.fillStyle = 'rgba(0,0,0,0.3)'
+  1728→    ctx.fillRect(8, H - 4, W - 16, 2)
+  1729→  }
+  1730→
+  1731→  ctx.restore()
+  1732→
+  1733→  buildingCache.set(key, c)
+  1734→  return c
+  1735→}
+  1736→
+  1737→export function drawBuilding(ctx: CanvasRenderingContext2D, type: BuildingType, faction: Faction, px_: number, py_: number, w = 1, h = 1) {
+  1738→  const img = renderBuilding(type, faction, w, h)
+  1739→  const facadeH = (w * TILE_SIZE) / 2
+  1740→  ctx.drawImage(img, px_, py_ - facadeH)
+  1741→}
+  1742→
+  1743→// ---------- Unit rendering (detailed, with bob animation) ----------
+  1744→export type UnitType = 'harvester' | 'soldier' | 'tank'
+  1745→
+  1746→const unitCache = new Map<string, HTMLCanvasElement>()
+  1747→// 8-directional pre-rendered vehicle sprites (harvester, tank).
+  1748→// Soldiers do not rotate (they always face the player).
+  1749→const unitDirCache = new Map<string, HTMLCanvasElement>()
+  1750→
+  1751→function renderUnit(type: UnitType, faction: Faction): HTMLCanvasElement {
+  1752→  const key = `${type}_${faction}`
+  1753→  let c = unitCache.get(key)
+  1754→  if (c) return c
+  1755→  c = document.createElement('canvas')
+  1756→  c.width = TILE_SIZE; c.height = TILE_SIZE
+  1757→  const ctx = c.getContext('2d')!
+  1758→  const col = FACTION_COLORS[faction]
+  1759→  const s = TILE_SIZE
+  1760→  const cx = s / 2
+  1761→
+  1762→  // shadow
+  1763→  ctx.fillStyle = 'rgba(0,0,0,0.4)'
+  1764→  ctx.beginPath(); ctx.ellipse(cx, s - 6, 9, 3.5, 0, 0, Math.PI * 2); ctx.fill()
+  1765→
+  1766→  if (type === 'harvester') {
+  1767→    // tracks
+  1768→    rrect(ctx, 5, s - 11, 28, 5, 2, '#2a2a2a')
+  1769→    for (let i = 0; i < 6; i++) px(ctx, 7 + i * 5, s - 10, 3, 3, '#4a4a4a')
+  1770→    // body
+  1771→    rrect(ctx, 6, s - 20, 26, 9, 2, col.dark)
+  1772→    rrect(ctx, 6, s - 20, 26, 2, col.primary)
+  1773→    px(ctx, 7, s - 19, 24, 1, col.light)
+  1774→    // cabin
+  1775→    rrect(ctx, 18, s - 26, 12, 7, 1, col.primary)
+  1776→    px(ctx, 18, s - 26, 12, 1, col.light)
+  1777→    // window
+  1778→    rrect(ctx, 21, s - 24, 7, 4, 1, '#7ac0ff')
+  1779→    px(ctx, 21, s - 24, 7, 1, '#a8d8ff')
+  1780→    // scoop
+  1781→    rrect(ctx, 2, s - 17, 5, 6, 1, '#5a5a5a')
+  1782→    px(ctx, 1, s - 16, 2, 4, '#3a3a3a')
+  1783→    px(ctx, 2, s - 13, 5, 1, '#6a6a6a')
+  1784→    // spice load
+  1785→    rrect(ctx, 10, s - 16, 6, 2, 1, '#e85d2f')
+  1786→    px(ctx, 10, s - 16, 6, 1, '#ff9060')
+  1787→    // exhaust
+  1788→    px(ctx, 30, s - 25, 2, 2, '#4a4a4a')
+  1789→    px(ctx, 31, s - 27, 1, 2, 'rgba(150,150,150,0.6)')
+  1790→  } else if (type === 'soldier') {
+  1791→    // legs
+  1792→    px(ctx, cx - 3, s - 10, 2, 4, col.dark)
+  1793→    px(ctx, cx + 1, s - 10, 2, 4, col.dark)
+  1794→    px(ctx, cx - 3, s - 6, 2, 1, '#1a1a1a')
+  1795→    px(ctx, cx + 1, s - 6, 2, 1, '#1a1a1a')
+  1796→    // body
+  1797→    rrect(ctx, cx - 3, s - 18, 6, 8, 1, col.primary)
+  1798→    px(ctx, cx - 3, s - 18, 6, 1, col.light)
+  1799→    px(ctx, cx - 3, s - 13, 6, 1, col.trim)
+  1800→    // belt
+  1801→    px(ctx, cx - 3, s - 12, 6, 1, col.dark)
+  1802→    // head
+  1803→    rrect(ctx, cx - 2, s - 22, 4, 4, 1, '#d4a878')
+  1804→    px(ctx, cx - 2, s - 22, 4, 1, '#b88860')
+  1805→    // helmet
+  1806→    rrect(ctx, cx - 3, s - 23, 6, 2, 1, col.dark)
+  1807→    px(ctx, cx - 3, s - 23, 6, 1, col.primary)
+  1808→    // rifle
+  1809→    px(ctx, cx + 3, s - 16, 7, 1, '#2a2a2a')
+  1810→    px(ctx, cx + 9, s - 17, 1, 2, '#2a2a2a')
+  1811→    px(ctx, cx + 2, s - 15, 1, 2, '#4a4a4a')
+  1812→    // backpack
+  1813→    px(ctx, cx - 5, s - 17, 2, 4, col.dark)
+  1814→  } else if (type === 'tank') {
+  1815→    // tracks
+  1816→    rrect(ctx, 4, s - 12, 30, 6, 2, '#2a2a2a')
+  1817→    for (let i = 0; i < 6; i++) px(ctx, 5 + i * 5, s - 11, 3, 4, '#4a4a4a')
+  1818→    // body
+  1819→    rrect(ctx, 5, s - 22, 28, 10, 2, col.dark)
+  1820→    rrect(ctx, 5, s - 22, 28, 2, col.primary)
+  1821→    px(ctx, 6, s - 21, 26, 1, col.light)
+  1822→    // turret
+  1823→    rrect(ctx, cx - 6, s - 30, 14, 9, 2, col.primary)
+  1824→    px(ctx, cx - 6, s - 30, 14, 1, col.light)
+  1825→    px(ctx, cx - 6, s - 22, 14, 1, col.dark)
+  1826→    // cannon
+  1827→    px(ctx, cx + 6, s - 27, 10, 2, '#2a2a2a')
+  1828→    px(ctx, cx + 15, s - 28, 2, 1, '#1a1a1a')
+  1829→    // muzzle brake
+  1830→    px(ctx, cx + 14, s - 28, 3, 4, '#3a3a3a')
+  1831→    // hatch
+  1832→    rrect(ctx, cx - 2, s - 29, 4, 2, 1, col.flag)
+  1833→    // details
+  1834→    px(ctx, 7, s - 14, 3, 2, col.trim)
+  1835→    px(ctx, s - 10, s - 14, 3, 2, col.trim)
+  1836→  }
+  1837→
+  1838→  unitCache.set(key, c)
+  1839→  return c
+  1840→}
+  1841→
+  1842→// Pre-render a vehicle sprite rotated to one of 8 cardinal/intercardinal
+  1843→// directions. dir: 0=E, 1=SE, 2=S, 3=SW, 4=W, 5=NW, 6=N, 7=NE (clockwise
+  1844→// in canvas coords because +Y is down). The base renderUnit() draws vehicles
+  1845→// facing right (East, dir 0); we rotate that sprite around the tile center.
+  1846→function renderUnitDirection(type: UnitType, faction: Faction, dir: number): HTMLCanvasElement {
+  1847→  const key = `${type}_${faction}_${dir}`
+  1848→  let c = unitDirCache.get(key)
+  1849→  if (c) return c
+  1850→  const base = renderUnit(type, faction) // existing function, draws facing right (East)
+  1851→  c = document.createElement('canvas')
+  1852→  c.width = TILE_SIZE; c.height = TILE_SIZE
+  1853→  const ctx = c.getContext('2d')!
+  1854→  ctx.imageSmoothingEnabled = true
+  1855→  ctx.translate(TILE_SIZE / 2, TILE_SIZE / 2)
+  1856→  ctx.rotate(dir * Math.PI / 4)
+  1857→  ctx.drawImage(base, -TILE_SIZE / 2, -TILE_SIZE / 2)
+  1858→  unitDirCache.set(key, c)
+  1859→  return c
+  1860→}
+  1861→
+  1862→export function drawUnit(ctx: CanvasRenderingContext2D, type: UnitType, faction: Faction, px_: number, py_: number, bob = 0, facing = 0) {
+  1863→  if (type === 'soldier') {
+  1864→    // soldiers don't rotate (they face the player), just draw with bob
+  1865→    const img = renderUnit(type, faction)
+  1866→    ctx.drawImage(img, px_ - TILE_SIZE / 2, py_ - TILE_SIZE / 2 + bob)
+  1867→  } else {
+  1868→    // vehicles (harvester, tank) use 8-directional pre-rendered sprites.
+  1869→    // Normalize facing angle to [0, 2*PI), then snap to nearest 45° step.
+  1870→    // 0 = East (right), PI/2 = South (canvas down), PI = West, 3PI/2 = North.
+  1871→    // dir: 0=E, 1=SE, 2=S, 3=SW, 4=W, 5=NW, 6=N, 7=NE.
+  1872→    let angle = facing
+  1873→    while (angle < 0) angle += Math.PI * 2
+  1874→    while (angle >= Math.PI * 2) angle -= Math.PI * 2
+  1875→    const dir = Math.round(angle / (Math.PI / 4)) % 8
+  1876→    const img = renderUnitDirection(type, faction, dir)
+  1877→    ctx.drawImage(img, px_ - TILE_SIZE / 2, py_ - TILE_SIZE / 2 + bob)
+  1878→  }
+  1879→}
+  1880→
+  1881→// ---------- Worm rendering (detailed, Shai-Hulud) ----------
+  1882→let wormCache: HTMLCanvasElement | null = null
+  1883→function renderWorm(): HTMLCanvasElement {
+  1884→  if (wormCache) return wormCache
+  1885→  const c = document.createElement('canvas')
+  1886→  c.width = TILE_SIZE; c.height = TILE_SIZE
+  1887→  const ctx = c.getContext('2d')!
+  1888→  const s = TILE_SIZE
+  1889→  const cx = s / 2, cy = s / 2
+  1890→
+  1891→  // ground shadow (sand displacement)
+  1892→  ctx.fillStyle = 'rgba(60,30,5,0.45)'
+  1893→  ctx.beginPath(); ctx.ellipse(cx, s - 5, 15, 4, 0, 0, Math.PI * 2); ctx.fill()
+  1894→
+  1895→  // body — long segmented worm emerging from sand, horizontal orientation
+  1896→  // tail (tapering, behind)
+  1897→  ctx.fillStyle = '#7a3a10'
+  1898→  ctx.beginPath()
+  1899→  ctx.moveTo(2, cy + 1)
+  1900→  ctx.quadraticCurveTo(cx - 8, cy - 3, cx - 4, cy)
+  1901→  ctx.lineTo(cx - 4, cy + 6)
+  1902→  ctx.quadraticCurveTo(cx - 8, cy + 7, 2, cy + 7)
+  1903→  ctx.fill()
+  1904→
+  1905→  // main body segments (rounded, overlapping)
+  1906→  const segments = [
+  1907→    { x: cx - 8, y: cy, r: 5, shade: '#8b4513' },
+  1908→    { x: cx - 4, y: cy - 1, r: 6, shade: '#9a5018' },
+  1909→    { x: cx, y: cy - 2, r: 7, shade: '#a85820' },
+  1910→    { x: cx + 4, y: cy - 1, r: 7, shade: '#9a5018' },
+  1911→  ]
+  1912→  for (const seg of segments) {
+  1913→    ctx.fillStyle = seg.shade
+  1914→    ctx.beginPath(); ctx.ellipse(seg.x, seg.y + 3, seg.r, seg.r - 1, 0, 0, Math.PI * 2); ctx.fill()
+  1915→  }
+  1916→
+  1917→  // segment ring lines (texture)
+  1918→  ctx.strokeStyle = '#5a2810'; ctx.lineWidth = 1
+  1919→  for (let i = -2; i <= 2; i++) {
+  1920→    const x = cx + i * 4
+  1921→    ctx.beginPath()
+  1922→    ctx.moveTo(x, cy - 3)
+  1923→    ctx.quadraticCurveTo(x - 1, cy + 3, x, cy + 7)
+  1924→    ctx.stroke()
+  1925→  }
+  1926→
+  1927→  // top highlight (light from above)
+  1928→  ctx.fillStyle = '#c07030'
+  1929→  ctx.beginPath(); ctx.ellipse(cx, cy - 1, 10, 2, 0, 0, Math.PI * 2); ctx.fill()
+  1930→  ctx.fillStyle = '#e09040'
+  1931→  ctx.beginPath(); ctx.ellipse(cx - 2, cy - 2, 6, 1, 0, 0, Math.PI * 2); ctx.fill()
+  1932→
+  1933→  // mouth — circular maw at the front (right side)
+  1934→  const mouthX = cx + 7, mouthY = cy + 2
+  1935→  // outer lips (darker)
+  1936→  ctx.fillStyle = '#3a1008'
+  1937→  ctx.beginPath(); ctx.ellipse(mouthX, mouthY, 5, 4, 0, 0, Math.PI * 2); ctx.fill()
+  1938→  // inner mouth (glowing red)
+  1939→  const mouthGrad = ctx.createRadialGradient(mouthX, mouthY, 0, mouthX, mouthY, 4)
+  1940→  mouthGrad.addColorStop(0, '#ff4020')
+  1941→  mouthGrad.addColorStop(0.5, '#a02010')
+  1942→  mouthGrad.addColorStop(1, '#3a1008')
+  1943→  ctx.fillStyle = mouthGrad
+  1944→  ctx.beginPath(); ctx.ellipse(mouthX, mouthY, 3.5, 3, 0, 0, Math.PI * 2); ctx.fill()
+  1945→  // teeth — triangular, ring around mouth
+  1946→  ctx.fillStyle = '#fff8e0'
+  1947→  for (let i = 0; i < 8; i++) {
+  1948→    const a = (i / 8) * Math.PI * 2
+  1949→    const tx = mouthX + Math.cos(a) * 4
+  1950→    const ty = mouthY + Math.sin(a) * 3
+  1951→    ctx.beginPath()
+  1952→    ctx.moveTo(tx, ty)
+  1953→    ctx.lineTo(mouthX + Math.cos(a) * 2.5, mouthY + Math.sin(a) * 1.8)
+  1954→    ctx.lineTo(mouthX + Math.cos(a + 0.4) * 4, mouthY + Math.sin(a + 0.4) * 3)
+  1955→    ctx.closePath(); ctx.fill()
+  1956→  }
+  1957→
+  1958→  // sand spray at base (emerging effect)
+  1959→  ctx.fillStyle = 'rgba(200,150,70,0.6)'
+  1960→  for (let i = 0; i < 6; i++) {
+  1961→    const px2 = 3 + Math.random() * 6
+  1962→    const py2 = s - 8 + Math.random() * 5
+  1963→    ctx.fillRect(px2, py2, 1, 1)
+  1964→  }
+  1965→  for (let i = 0; i < 4; i++) {
+  1966→    const px2 = s - 8 + Math.random() * 6
+  1967→    const py2 = s - 8 + Math.random() * 5
+  1968→    ctx.fillRect(px2, py2, 1, 1)
+  1969→  }
+  1970→
+  1971→  wormCache = c
+  1972→  return c
+  1973→}
+  1974→
+  1975→export function drawWorm(ctx: CanvasRenderingContext2D, px_: number, py_: number, angle = 0) {
+  1976→  const img = renderWorm()
+  1977→  ctx.save()
+  1978→  ctx.translate(px_, py_)
+  1979→  ctx.rotate(angle)
+  1980→  ctx.drawImage(img, -TILE_SIZE / 2, -TILE_SIZE / 2)
+  1981→  ctx.restore()
+  1982→}
+  1983→
+  1984→// ---------- Health bar ----------
+  1985→export function drawHealthBar(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, ratio: number) {
+  1986→  const h = 4
+  1987→  const bx = x - w / 2
+  1988→  ctx.fillStyle = 'rgba(0,0,0,0.7)'
+  1989→  rrect(ctx, bx - 1, y - 1, w + 2, h + 2, 1, 'rgba(0,0,0,0.7)')
+  1990→  ctx.fillStyle = '#1a1a1a'
+  1991→  ctx.fillRect(bx, y, w, h)
+  1992→  const fillW = Math.max(0, Math.min(w, w * ratio))
+  1993→  ctx.fillStyle = ratio > 0.5 ? '#22c55e' : ratio > 0.25 ? '#eab308' : '#ef4444'
+  1994→  ctx.fillRect(bx, y, fillW, h)
+  1995→  px(ctx, bx, y, fillW, 1, 'rgba(255,255,255,0.3)')
+  1996→}
+  1997→
+  1998→// ---------- Selection ring ----------
+  1999→export function drawSelectionRing(ctx: CanvasRenderingContext2D, px_: number, py_: number, color = '#4ade80') {
+  2000→  ctx.strokeStyle = color
+
+[showing lines 1-2000 of 2190; use offset=2001 with limit to continue reading]
