@@ -84,3 +84,80 @@ All of the following were completely eliminated from `renderBuilding`:
 - The 2 pre-existing `rrect` argument errors in `renderUnit` (harvester ~line 1688, tank ~line 1736) could optionally be fixed by adding the missing `r` parameter (e.g., `rrect(ctx, 6, s-20, 26, 2, 1, col.primary)`)
 - Visual review in-browser recommended to confirm the futuristic aesthetic renders correctly at all footprint sizes
 - If the build menu / `getBuildingPreview` scaling needs adjustment for the new taller structures (e.g., palace antenna extends to y=H*0.05), verify preview thumbnails still look good
+
+## Task dimetric-1: Semi-dimetric buildings + 8-directional unit sprites
+**Agent:** general-purpose sub-agent
+**File modified:** `src/lib/tile-renderer.ts` (only — `renderBuilding`, `drawBuilding`, `getBuildingPreview`, `renderUnitDirection` (new), `drawUnit`, plus a new `unitDirCache`)
+
+### Summary
+Implemented two changes requested in task dimetric-1:
+1. **Semi-dimetric buildings** — buildings now render with a visible vertical facade/wall rising upward from the flat top-down footprint, giving a ~30° viewing-angle look (C&C/StarCraft 2.5D style). Canvas height = footprint height + W/2.
+2. **8-directional unit sprites for vehicles** — harvester and tank are now pre-rendered into 8 cached rotated sprites (one per 45° direction) instead of being rotated at draw-time. Soldiers remain non-rotating.
+
+### CHANGE 1 — Semi-dimetric buildings
+
+#### `renderBuilding(type, faction, w, h)`
+- **Canvas size**: was `W × H`; now `W × (H + facadeHeight)` where `facadeHeight = W / 2` (2:1 height ratio per task spec).
+  - 2×2 palace/barracks/refinery/generator: 80×120 (was 80×80)
+  - 3×2 factory: 120×140 (was 120×80)
+  - 1×1 turret: 40×60 (was 40×40)
+- **Layout in canvas**:
+  - `y = 0 .. facadeHeight`: NEW vertical facade wall (the front face of the building, rising upward from the base — sits ABOVE the footprint in canvas space, which is "upward" visually after the `-facadeHeight` offset in `drawBuilding`).
+  - `y = facadeHeight .. facadeHeight + H`: existing top-down footprint artwork, wrapped in `ctx.save(); ctx.translate(0, facadeHeight); …existing per-building code… ctx.restore();`. All existing futuristic artwork (palace antenna, barracks slit windows, factory sawtooth roof, turret cannon, refinery tank, generator plasma core) is preserved unchanged — only its canvas y-origin is shifted down by `facadeHeight`.
+- **Facade drawing** (new, generic for all 6 building types — futuristic aesthetic matching the existing palette):
+  - Outer dark frame (`#0a0a0a`) + main wall gradient (`#3a3a3a` top → `#7a7a7a` bottom) suggesting perspective (top is further away / darker, bottom is closer / lighter).
+  - Side-wall shading: left & right edges get a `rgba(0,0,0,0.55) → transparent` gradient overlay — "darker shades for side walls, lighter for front face" per spec.
+  - Top edge highlight (`#8a8a8a` + `#6a6a6a`) — sun-baked parapet rim.
+  - 2 horizontal panel seams (reinforced concrete bands) + N vertical panel seams (`numVSeams = max(3, floor(W/20))`).
+  - 2 rows × N cols of glowing cyan slit windows (`#0080a0` frame + `#00d0ff` glow + `#80e8ff` highlight + `#1a1a1a` frame top/bottom). `winCols = max(2, floor(W/24))` so wider buildings get more windows.
+  - Faction accent stripe (`col.primary` + `col.trim`) at the bottom of the facade, just above the footprint — visually ties the facade to the building's faction.
+- All existing per-building futuristic details (glowing windows, pipes, antennas, energy cores) are preserved on the footprint portion; the facade adds a complementary layer of futuristic detail (windows, panel seams, faction stripe) on the vertical wall.
+
+#### `drawBuilding(ctx, type, faction, px_, py_, w, h)`
+- Now offsets the building image upward by `facadeH = (w * TILE_SIZE) / 2` so the FOOTPRINT portion of the image sits at the building's tile position (`py_`) and the facade rises upward above the tile:
+  ```ts
+  const img = renderBuilding(type, faction, w, h)
+  const facadeH = (w * TILE_SIZE) / 2
+  ctx.drawImage(img, px_, py_ - facadeH)
+  ```
+
+#### `getBuildingPreview(type, faction, size, w, h)`
+- Scale formula updated to fit the now-taller image inside the square preview canvas:
+  - Old: `size / (Math.max(w, h) * TILE_SIZE)` — clipped the new taller images.
+  - New: `size / Math.max(imgW, imgH)` where `imgW = w*TILE_SIZE` and `imgH = (h + w/2)*TILE_SIZE`.
+- Preview image is now also horizontally centered: `ctx.drawImage(img, (size/scale - imgW)/2, 0)` so taller-than-wide buildings (all of them now, since facadeHeight > 0) don't hug the left edge of the preview thumbnail.
+
+### CHANGE 2 — 8-directional unit sprites for vehicles
+
+#### New `unitDirCache = new Map<string, HTMLCanvasElement>()`
+- Added next to `unitCache`. Keyed by `${type}_${faction}_${dir}` (dir 0–7).
+
+#### New `renderUnitDirection(type, faction, dir)` function
+- Returns a cached `TILE_SIZE × TILE_SIZE` canvas containing the base vehicle sprite (from `renderUnit`) rotated `dir * 45°` around the tile center.
+- `imageSmoothingEnabled = true` for clean rotated edges.
+- dir convention (clockwise in canvas coords because +Y is down — matches the `drawUnit` comment in the task spec):
+  - 0=E, 1=SE, 2=S, 3=SW, 4=W, 5=NW, 6=N, 7=NE
+- Caches all 8 directions lazily on first use; subsequent calls hit the cache.
+
+#### Updated `drawUnit(ctx, type, faction, px_, py_, bob, facing)`
+- `soldier`: unchanged behavior — calls `renderUnit` directly and draws with bob (soldiers always face the player).
+- `harvester` / `tank`: no longer rotates via `ctx.save/translate/rotate/restore` at draw-time. Instead:
+  1. Normalizes `facing` to `[0, 2π)`.
+  2. Snaps to nearest 45° step: `dir = Math.round(angle / (π/4)) % 8`.
+  3. Calls `renderUnitDirection(type, faction, dir)` to get the pre-rendered rotated sprite.
+  4. Draws the sprite at `(px_ - TILE_SIZE/2, py_ - TILE_SIZE/2 + bob)`.
+- This means each vehicle now has 8 visually distinct direction sprites cached in memory (2 types × 4 factions × 8 dirs = up to 64 cached canvases total, each 40×40 — negligible memory). Draw-time rotation is eliminated.
+
+### Verification
+- `cd /home/z/my-project && bun run lint` → **clean** (no eslint output).
+- `bunx tsc --noEmit` → 2 errors at `tile-renderer.ts:1772` and `:1820`. These are the **pre-existing** `rrect` argument errors in `renderUnit` (harvester body line ~1772, tank body line ~1820 — shifted from the previous 1688/1736 by +84 due to the new facade code). They are OUTSIDE the building rendering section and OUTSIDE the new `renderUnitDirection`/`drawUnit` changes; they exist in the unchanged harvester/tank body code inside `renderUnit` and were documented in the prior two worklog entries (Task 4-renderer and Task 8-futuristic). Next.js is configured with `typescript.ignoreBuildErrors: true` so these do not block the build.
+- No new TS or lint errors introduced by this task.
+- Verified structurally:
+  - `renderBuilding` opens `ctx.save(); ctx.translate(0, facadeHeight)` after the facade block, and closes with `ctx.restore()` immediately before `buildingCache.set(key, c); return c` — so all per-building branches (palace/barracks/factory/turret/refinery/generator) execute inside the translated scope and render at the bottom of the taller canvas.
+  - `drawBuilding` uses `py_ - facadeH` offset exactly as specified in the task.
+  - `renderUnitDirection` rotates the base sprite by `dir * π/4` and caches it; `drawUnit` snaps facing to the nearest of 8 directions for vehicles.
+
+### Next actions for integration agent
+- **Visual review in-browser** is recommended: confirm the facade looks good above each building type, that the `-facadeHeight` offset doesn't cause buildings to overlap the tile above them inappropriately (especially tall palace/barracks/refinery/generator which are 120px tall on 40px tiles — they'll extend 80px above their tile, i.e. 2 tiles up). The integration agent may want to adjust building render order to back-to-front (top-of-map first) so facades don't overlap buildings above them, OR accept the overlap as a stylistic choice (C&C-style).
+- The 2 pre-existing `rrect` argument errors in `renderUnit` (now at lines ~1772 and ~1820) could optionally be fixed by adding the missing `r` parameter (e.g. `rrect(ctx, 6, s-20, 26, 2, 1, col.primary)`). Not required for this task.
+- If the build menu / selected-building preview (`getBuildingPreview` at 48px) looks too small for the now-taller images, the integration agent can increase the preview `size` argument or adjust the build menu card layout.

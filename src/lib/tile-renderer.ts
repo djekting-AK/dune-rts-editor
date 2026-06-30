@@ -558,12 +558,90 @@ function renderBuilding(type: BuildingType, faction: Faction, w: number, h: numb
   let c = buildingCache.get(key)
   if (c) return c
   c = document.createElement('canvas')
-  c.width = w * TILE_SIZE; c.height = h * TILE_SIZE
-  const ctx = c.getContext('2d')!
-  const col = FACTION_COLORS[faction]
   const W = w * TILE_SIZE
   const H = h * TILE_SIZE
+  // Semi-dimetric: facade rises upward from the base with a 2:1 height ratio
+  // (facade height = 1/2 of footprint width). Canvas is now taller than the
+  // flat footprint: H + facadeHeight.
+  const facadeHeight = W / 2
+  c.width = W; c.height = H + facadeHeight
+  const ctx = c.getContext('2d')!
+  const col = FACTION_COLORS[faction]
   const rng = mulberry((type.charCodeAt(0) * 7919) ^ (faction.charCodeAt(0) * 4099) ^ (w * 131) ^ (h * 257))
+
+  // ============================================================
+  //  SEMI-DIMETRIC FACADE (vertical wall section, y = 0 .. facadeHeight)
+  //  Suggests a 30° viewing angle — building rises upward from the ground.
+  //  Side walls darker (perspective shading), front face lighter (lit).
+  //  Futuristic details (glowing windows, panel seams, faction stripe) appear
+  //  on this vertical facade instead of flat on the ground.
+  // ============================================================
+
+  // outer dark frame
+  rrect(ctx, 0, 0, W, facadeHeight, 2, '#0a0a0a')
+  // main wall gradient (top=further/darker, bottom=closer/lighter — perspective)
+  const wallGrad = ctx.createLinearGradient(0, 0, 0, facadeHeight)
+  wallGrad.addColorStop(0, '#3a3a3a')
+  wallGrad.addColorStop(0.5, '#5a5a5a')
+  wallGrad.addColorStop(1, '#7a7a7a')
+  rrect(ctx, 1, 1, W - 2, facadeHeight - 2, 1, wallGrad as any)
+  // side wall shading (darker shades on side walls — perspective shading)
+  const sideW = Math.max(4, W * 0.1)
+  const leftSideGrad = ctx.createLinearGradient(0, 0, sideW, 0)
+  leftSideGrad.addColorStop(0, 'rgba(0,0,0,0.55)')
+  leftSideGrad.addColorStop(1, 'rgba(0,0,0,0)')
+  ctx.fillStyle = leftSideGrad
+  ctx.fillRect(0, 0, sideW, facadeHeight)
+  const rightSideGrad = ctx.createLinearGradient(W - sideW, 0, W, 0)
+  rightSideGrad.addColorStop(0, 'rgba(0,0,0,0)')
+  rightSideGrad.addColorStop(1, 'rgba(0,0,0,0.55)')
+  ctx.fillStyle = rightSideGrad
+  ctx.fillRect(W - sideW, 0, sideW, facadeHeight)
+  // top edge highlight (sun-baked rim — catches the light at the parapet)
+  px(ctx, 1, 1, W - 2, 1, '#8a8a8a')
+  px(ctx, 1, 2, W - 2, 1, '#6a6a6a')
+  // horizontal panel seams (reinforced concrete bands)
+  for (let i = 1; i < 3; i++) {
+    const py2 = Math.floor(facadeHeight * i / 3)
+    px(ctx, 1, py2, W - 2, 1, '#1a1a1a')
+    px(ctx, 1, py2 + 1, W - 2, 1, '#5a5a5a')
+  }
+  // vertical panel seams (metal panel divisions)
+  const numVSeams = Math.max(3, Math.floor(W / 20))
+  for (let i = 1; i < numVSeams; i++) {
+    const sx2 = Math.floor(W * i / numVSeams)
+    px(ctx, sx2, 2, 1, facadeHeight - 3, '#1a1a1a')
+    px(ctx, sx2 + 1, 2, 1, facadeHeight - 3, '#4a4a4a')
+  }
+  // glowing cyan slit windows (2 rows × N columns — futuristic lit windows)
+  const winRows = 2
+  const winCols = Math.max(2, Math.floor(W / 24))
+  const cellW = (W - 8) / winCols
+  const winW = Math.min(cellW - 4, 10)
+  const winH = 4
+  for (let row = 0; row < winRows; row++) {
+    const wy = 6 + row * Math.max(8, (facadeHeight - 12) / winRows)
+    for (let col2 = 0; col2 < winCols; col2++) {
+      const wx2 = 4 + col2 * cellW + (cellW - winW) / 2
+      rrect(ctx, wx2, wy, winW, winH, 1, '#0080a0')
+      rrect(ctx, wx2, wy + 1, winW, winH - 2, 1, '#00d0ff')
+      px(ctx, wx2, wy, winW, 1, '#80e8ff')
+      // window frame top/bottom
+      px(ctx, wx2 - 1, wy - 1, winW + 2, 1, '#1a1a1a')
+      px(ctx, wx2 - 1, wy + winH, winW + 2, 1, '#1a1a1a')
+    }
+  }
+  // faction accent stripe near bottom of facade (just above the footprint)
+  px(ctx, 1, facadeHeight - 4, W - 2, 2, col.primary)
+  px(ctx, 1, facadeHeight - 2, W - 2, 1, col.trim)
+
+  // ============================================================
+  //  GROUND FOOTPRINT (top-down view, y = facadeHeight .. facadeHeight + H)
+  //  All existing per-building artwork is translated down by facadeHeight
+  //  so it occupies the bottom portion of the canvas (the flat ground base).
+  // ============================================================
+  ctx.save()
+  ctx.translate(0, facadeHeight)
 
   // ground shadow (spans building footprint)
   ctx.fillStyle = 'rgba(0,0,0,0.38)'
@@ -1650,19 +1728,25 @@ function renderBuilding(type: BuildingType, faction: Faction, w: number, h: numb
     ctx.fillRect(8, H - 4, W - 16, 2)
   }
 
+  ctx.restore()
+
   buildingCache.set(key, c)
   return c
 }
 
 export function drawBuilding(ctx: CanvasRenderingContext2D, type: BuildingType, faction: Faction, px_: number, py_: number, w = 1, h = 1) {
   const img = renderBuilding(type, faction, w, h)
-  ctx.drawImage(img, px_, py_)
+  const facadeH = (w * TILE_SIZE) / 2
+  ctx.drawImage(img, px_, py_ - facadeH)
 }
 
 // ---------- Unit rendering (detailed, with bob animation) ----------
 export type UnitType = 'harvester' | 'soldier' | 'tank'
 
 const unitCache = new Map<string, HTMLCanvasElement>()
+// 8-directional pre-rendered vehicle sprites (harvester, tank).
+// Soldiers do not rotate (they always face the player).
+const unitDirCache = new Map<string, HTMLCanvasElement>()
 
 function renderUnit(type: UnitType, faction: Faction): HTMLCanvasElement {
   const key = `${type}_${faction}`
@@ -1755,19 +1839,42 @@ function renderUnit(type: UnitType, faction: Faction): HTMLCanvasElement {
   return c
 }
 
+// Pre-render a vehicle sprite rotated to one of 8 cardinal/intercardinal
+// directions. dir: 0=E, 1=SE, 2=S, 3=SW, 4=W, 5=NW, 6=N, 7=NE (clockwise
+// in canvas coords because +Y is down). The base renderUnit() draws vehicles
+// facing right (East, dir 0); we rotate that sprite around the tile center.
+function renderUnitDirection(type: UnitType, faction: Faction, dir: number): HTMLCanvasElement {
+  const key = `${type}_${faction}_${dir}`
+  let c = unitDirCache.get(key)
+  if (c) return c
+  const base = renderUnit(type, faction) // existing function, draws facing right (East)
+  c = document.createElement('canvas')
+  c.width = TILE_SIZE; c.height = TILE_SIZE
+  const ctx = c.getContext('2d')!
+  ctx.imageSmoothingEnabled = true
+  ctx.translate(TILE_SIZE / 2, TILE_SIZE / 2)
+  ctx.rotate(dir * Math.PI / 4)
+  ctx.drawImage(base, -TILE_SIZE / 2, -TILE_SIZE / 2)
+  unitDirCache.set(key, c)
+  return c
+}
+
 export function drawUnit(ctx: CanvasRenderingContext2D, type: UnitType, faction: Faction, px_: number, py_: number, bob = 0, facing = 0) {
-  const img = renderUnit(type, faction)
   if (type === 'soldier') {
     // soldiers don't rotate (they face the player), just draw with bob
+    const img = renderUnit(type, faction)
     ctx.drawImage(img, px_ - TILE_SIZE / 2, py_ - TILE_SIZE / 2 + bob)
   } else {
-    // vehicles (harvester, tank) rotate to face movement direction
-    ctx.save()
-    ctx.translate(px_, py_ + bob)
-    // sprite is drawn facing right (0 rad). Rotate to facing.
-    ctx.rotate(facing)
-    ctx.drawImage(img, -TILE_SIZE / 2, -TILE_SIZE / 2)
-    ctx.restore()
+    // vehicles (harvester, tank) use 8-directional pre-rendered sprites.
+    // Normalize facing angle to [0, 2*PI), then snap to nearest 45° step.
+    // 0 = East (right), PI/2 = South (canvas down), PI = West, 3PI/2 = North.
+    // dir: 0=E, 1=SE, 2=S, 3=SW, 4=W, 5=NW, 6=N, 7=NE.
+    let angle = facing
+    while (angle < 0) angle += Math.PI * 2
+    while (angle >= Math.PI * 2) angle -= Math.PI * 2
+    const dir = Math.round(angle / (Math.PI / 4)) % 8
+    const img = renderUnitDirection(type, faction, dir)
+    ctx.drawImage(img, px_ - TILE_SIZE / 2, py_ - TILE_SIZE / 2 + bob)
   }
 }
 
@@ -1936,10 +2043,13 @@ export function getBuildingPreview(type: BuildingType, faction: Faction, size = 
   c.width = size; c.height = size
   const ctx = c.getContext('2d')!
   const img = renderBuilding(type, faction, w, h)
-  // scale the (potentially multi-tile) building image to fit the preview square
-  const scale = size / (Math.max(w, h) * TILE_SIZE)
+  // image is now W wide x (H + W/2) tall (semi-dimetric facade above footprint).
+  // Scale to fit the entire image inside the preview square and center it.
+  const imgW = w * TILE_SIZE
+  const imgH = (h + w / 2) * TILE_SIZE
+  const scale = size / Math.max(imgW, imgH)
   ctx.scale(scale, scale)
-  ctx.drawImage(img, 0, 0)
+  ctx.drawImage(img, (size / scale - imgW) / 2, 0)
   return c.toDataURL()
 }
 
