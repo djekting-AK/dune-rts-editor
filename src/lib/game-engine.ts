@@ -634,7 +634,7 @@ function findNearestEnemy(s: GameState, x: number, y: number, owner: Faction, ra
   return best
 }
 
-function findNearestSpice(s: GameState, x: number, y: number, range = 30): { x: number; y: number } | null {
+function findNearestSpice(s: GameState, x: number, y: number, range = 30, exceptUnitId?: number): { x: number; y: number } | null {
   let best: { x: number; y: number } | null = null
   let bestD = range
   for (let r = 1; r <= range; r += 2) {
@@ -644,6 +644,10 @@ function findNearestSpice(s: GameState, x: number, y: number, range = 30): { x: 
         if (!inBounds(cx, cy, s.width, s.height)) continue
         const t = s.terrain[idx(cx, cy, s.width)]
         if (t === 5 || t === 6) {
+          // skip if another harvester is already harvesting/heading to this tile
+          const occupied = s.units.some(o => o.type === 'harvester' && o.id !== exceptUnitId &&
+            Math.round(o.tx) === cx && Math.round(o.ty) === cy)
+          if (occupied) continue
           const d = dist(x, y, cx, cy)
           if (d < bestD) { bestD = d; best = { x: cx + 0.5, y: cy + 0.5 } }
         }
@@ -683,6 +687,29 @@ function findNearestPalace(s: GameState, x: number, y: number, owner: Faction): 
   return best
 }
 
+// Find a free tile around a building's perimeter for unloading (no stacking).
+// Picks the closest free tile not occupied by another harvester heading there.
+function findUnloadPoint(s: GameState, b: Building, x: number, y: number, exceptUnitId: number): { x: number; y: number } | null {
+  let best: { x: number; y: number } | null = null
+  let bestD = 99
+  // search perimeter tiles of the footprint
+  for (let dy = -1; dy <= b.h; dy++) {
+    for (let dx = -1; dx <= b.w; dx++) {
+      // only perimeter (edge ring around footprint)
+      if (dx > -1 && dx < b.w && dy > -1 && dy < b.h) continue
+      const tx = b.x + dx, ty = b.y + dy
+      if (!isWalkable(s.terrain, tx, ty, s.width, s.height)) continue
+      // check no other harvester is already heading to / unloading at this tile
+      const occupied = s.units.some(o => o.type === 'harvester' && o.id !== exceptUnitId &&
+        Math.round(o.tx) === tx && Math.round(o.ty) === ty)
+      if (occupied) continue
+      const d = dist(x, y, tx + 0.5, ty + 0.5)
+      if (d < bestD) { bestD = d; best = { x: tx + 0.5, y: ty + 0.5 } }
+    }
+  }
+  return best
+}
+
 function updateUnits(s: GameState) {
   for (const u of s.units) {
     if (u.cooldown > 0) u.cooldown--
@@ -700,24 +727,23 @@ function updateUnits(s: GameState) {
           // full — must go to a refinery. If none exists, wait at base.
           const refinery = findNearestRefinery(s, u.x, u.y, u.owner)
           if (refinery) {
-            u.tx = refinery.x + refinery.w/2
-            u.ty = refinery.y + refinery.h/2
-            u.state = 'return'
+            // find a free unloading point around the refinery (no stacking)
+            const up = findUnloadPoint(s, refinery, u.x, u.y, u.id)
+            if (up) { u.tx = up.x; u.ty = up.y; u.state = 'return' }
           } else {
-            // no refinery — go to palace and wait
+            // no refinery — go to palace and wait nearby (distributed)
             const palace = findNearestPalace(s, u.x, u.y, u.owner)
             if (palace) {
-              const d = dist(u.x, u.y, palace.x + palace.w/2, palace.y + palace.h/2)
-              if (d > 3) {
-                u.tx = palace.x + palace.w/2
-                u.ty = palace.y + palace.h/2
-                u.state = 'return'
+              const up = findUnloadPoint(s, palace, u.x, u.y, u.id)
+              if (up) {
+                const d = dist(u.x, u.y, up.x, up.y)
+                if (d > 2) { u.tx = up.x; u.ty = up.y; u.state = 'return' }
+                // else: stay idle and wait for refinery
               }
-              // else: stay idle and wait (wait for refinery to be built)
             }
           }
         } else {
-          const sp = findNearestSpice(s, u.x, u.y)
+          const sp = findNearestSpice(s, u.x, u.y, 30, u.id)
           if (sp) { u.tx = sp.x; u.ty = sp.y; u.state = 'harvest' }
         }
       } else if (u.state === 'harvest') {
@@ -737,12 +763,12 @@ function updateUnits(s: GameState) {
               s.terrainVersion++
             }
             if (u.cargo >= u.maxCargo) {
-              // full — find refinery
+              // full — find refinery with free unload point
               const refinery = findNearestRefinery(s, u.x, u.y, u.owner)
               if (refinery) {
-                u.tx = refinery.x + refinery.w/2
-                u.ty = refinery.y + refinery.h/2
-                u.state = 'return'
+                const up = findUnloadPoint(s, refinery, u.x, u.y, u.id)
+                if (up) { u.tx = up.x; u.ty = up.y; u.state = 'return' }
+                else u.state = 'idle' // refinery busy, wait
               } else {
                 u.state = 'idle' // will wait at base
               }
@@ -752,25 +778,44 @@ function updateUnits(s: GameState) {
           moveToward(s, u, u.tx, u.ty, speed)
         }
       } else if (u.state === 'return') {
-        // Check if target is a refinery (only refinery can unload)
-        const targetBld = s.buildings.find(b => b.x + b.w/2 === u.tx && b.y + b.h/2 === u.ty && b.owner === u.owner)
+        // Find which refinery/palace this unload point belongs to
+        const refinery = findNearestRefinery(s, u.tx, u.ty, u.owner)
+        const palace = findNearestPalace(s, u.tx, u.ty, u.owner)
+        // determine target building (closest to unload point)
+        let targetBld: Building | null = null
+        if (refinery) {
+          const dR = dist(u.tx, u.ty, refinery.x + refinery.w/2, refinery.y + refinery.h/2)
+          if (palace) {
+            const dP = dist(u.tx, u.ty, palace.x + palace.w/2, palace.y + palace.h/2)
+            targetBld = dR < dP ? refinery : palace
+          } else targetBld = refinery
+        } else if (palace) targetBld = palace
+
+        // If target is palace (no refinery), just wait nearby — don't unload
         if (targetBld && targetBld.type !== 'refinery') {
-          // target is palace but no refinery — just wait nearby (don't unload)
           const d = dist(u.x, u.y, u.tx, u.ty)
-          if (d < 3) {
+          if (d < 1.5) {
             u.state = 'idle' // wait at base for refinery
           } else {
             moveToward(s, u, u.tx, u.ty, speed)
           }
           continue
         }
-        // Check if another harvester is already unloading at this refinery
-        const unloadingAtRefinery = s.units.some(o => o.id !== u.id && o.type === 'harvester' && o.owner === u.owner && o.state === 'return' && o.tx === u.tx && o.ty === u.ty && dist(o.x, o.y, u.tx, u.ty) < 2)
+        // Check if another harvester is occupying our unload point
         const d = dist(u.x, u.y, u.tx, u.ty)
-        if (unloadingAtRefinery && d < 3) {
-          // wait — another harvester is unloading
-          // stay in place (idle movement)
-        } else if (d < 1.5) {
+        const blockedByOther = s.units.some(o => o.id !== u.id && o.type === 'harvester' &&
+          Math.round(o.x) === Math.round(u.tx) && Math.round(o.y) === Math.round(u.ty) &&
+          dist(o.x, o.y, u.tx, u.ty) < 0.8)
+        if (blockedByOther && d < 2) {
+          // our spot taken — find a new free unload point
+          if (refinery) {
+            const up = findUnloadPoint(s, refinery, u.x, u.y, u.id)
+            if (up) { u.tx = up.x; u.ty = up.y }
+            else u.state = 'idle' // wait
+          } else {
+            u.state = 'idle'
+          }
+        } else if (d < 1.2) {
           // unload gradually
           const unloadRate = 8
           const unload = Math.min(u.cargo, unloadRate)
@@ -979,15 +1024,17 @@ function moveToward(s: GameState, u: Unit, tx: number, ty: number, speed: number
   if (d < 0.05) return
   // update facing direction toward target
   u.facing = Math.atan2(dy, dx)
-  // If close to target, move directly (smooth final approach)
+  // If close to target, move directly (smooth final approach) — but never stack
   if (d < speed * 2) {
     const tr = Math.round(tx), tc = Math.round(ty)
     const free = isTileFree(s, tr, tc, u.id) || (Math.round(u.x) === tr && Math.round(u.y) === tc)
-    if (free || d < 0.4) {
+    if (free && d >= 0.4) {
       u.x = Math.max(0.5, Math.min(s.width - 0.5, u.x + (dx / d) * Math.min(speed, d)))
       u.y = Math.max(0.5, Math.min(s.height - 0.5, u.y + (dy / d) * Math.min(speed, d)))
       return
     }
+    // if d < 0.4 but tile occupied by another unit — stop (don't stack)
+    if (d < 0.4) return
   }
   // Try direct movement first (fast path — most of the time this works)
   const ux = (dx / d) * speed, uy = (dy / d) * speed
