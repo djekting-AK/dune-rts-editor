@@ -16,6 +16,7 @@ export interface Building {
   cooldown: number
   queue: { type: UnitType; progress: number; cost: number }[]
   research?: ResearchState
+  level: number   // upgrade level (1 = base)
 }
 
 export interface ResearchState {
@@ -150,10 +151,11 @@ export const CONFIG = {
   factory:   { cost: 300, hp: 550, buildTime: 300, energy: 5, w: 3, h: 2 },
   turret:    { cost: 100, hp: 280, buildTime: 120, dmg: 16, range: 4.5, atkCd: 32, energy: 2, w: 1, h: 1 },
   refinery:  { cost: 200, hp: 450, buildTime: 180, energy: 2, w: 2, h: 2 },
-  generator: { cost: 120, hp: 300, buildTime: 100, energy: 0, energyOutput: 12, w: 2, h: 2 },
+  generator: { cost: 120, hp: 300, buildTime: 100, energy: 0, energyOutput: 12, w: 2, h: 2, upgradeCost: 100, upgradeOutput: 12 },
+  radar:     { cost: 180, hp: 250, buildTime: 140, energy: 3, w: 2, h: 2, visionRange: 12 },
   palace:    { cost: 0,   hp: 1500, buildTime: 0, energy: 0, w: 2, h: 2 },
   spiceValue: { 5: 1, 6: 2 },
-  wormInterval: 3500,   // rarer spawns — element of surprise
+  wormInterval: 3500,
   wormLife: 500,
   wormHp: 120,
   wormDmg: 60,
@@ -170,6 +172,7 @@ export const FOOTPRINT: Record<string, { w: number; h: number }> = {
   turret:    { w: 1, h: 1 },
   refinery:  { w: 2, h: 2 },
   generator: { w: 2, h: 2 },
+  radar:     { w: 2, h: 2 },
 }
 
 // ---------- Research definitions ----------
@@ -230,6 +233,29 @@ export const BUILD_COSTS: Record<string, number> = {
   turret: CONFIG.turret.cost,
   refinery: CONFIG.refinery.cost,
   generator: CONFIG.generator.cost,
+  radar: CONFIG.radar.cost,
+}
+
+// ---------- Generator upgrade ----------
+export function upgradeGenerator(s: GameState, bld: Building): boolean {
+  if (bld.type !== 'generator') return false
+  if (bld.level >= 3) return false
+  const cost = CONFIG.generator.upgradeCost * bld.level
+  if (s.players[bld.owner].credits < cost) return false
+  if (bld.hp < bld.maxHp * 0.5) return false
+  s.players[bld.owner].credits -= cost
+  bld.level++
+  bld.maxHp += 100
+  bld.hp = bld.maxHp
+  recomputeEnergy(s)
+  logEvent(s, 'build', `Генератор улучшен до уровня ${bld.level}`)
+  return true
+}
+
+// ---------- Radar reveals fog of war ----------
+export function getVisionRange(b: Building): number {
+  if (b.type === 'radar') return CONFIG.radar.visionRange
+  return VISION_RANGES[b.type] || 3
 }
 
 // ---------- Helpers ----------
@@ -300,7 +326,7 @@ export function createGame(width: number, height: number, terrain: number[], dif
     for (let dy = 0; dy < fp.h; dy++) for (let dx = 0; dx < fp.w; dx++) {
       if (inBounds(bx + dx, by + dy, width, height)) terrain[idx(bx + dx, by + dy, width)] = 3
     }
-    s.buildings.push({ id: s.nextId++, type: 'palace', x: bx, y: by, w: fp.w, h: fp.h, owner: fac, hp: CONFIG.palace.hp, maxHp: CONFIG.palace.hp, cooldown: 0, queue: [] })
+    s.buildings.push({ id: s.nextId++, type: 'palace', x: bx, y: by, w: fp.w, h: fp.h, owner: fac, hp: CONFIG.palace.hp, maxHp: CONFIG.palace.hp, cooldown: 0, queue: [], level: 1 })
     // start harvester below palace
     s.units.push(makeUnit(s, 'harvester', fac, bx + fp.w / 2, by + fp.h + 0.5))
   }
@@ -330,8 +356,8 @@ export function recomputeEnergy(s: GameState) {
     let max = 0, demand = 0
     for (const b of s.buildings) {
       if (b.owner !== f) continue
-      if (b.type === 'generator') max += CONFIG.generator.energyOutput
-      else if (b.type === 'palace') max += 6 // palace gives a little
+      if (b.type === 'generator') max += CONFIG.generator.energyOutput * (b.level || 1)
+      else if (b.type === 'palace') max += 6
       else demand += (CONFIG[b.type] as any).energy || 0
     }
     for (const u of s.units) {
@@ -401,6 +427,7 @@ export function placeBuilding(s: GameState, owner: Faction, type: BuildingType, 
     id: s.nextId++, type, x, y, w: fp.w, h: fp.h, owner,
     hp: cfg.hp * 0.5, maxHp: cfg.hp,
     cooldown: 0, queue: [],
+    level: 1,
   })
   recomputeEnergy(s)
   logEvent(s, 'build', `${owner === 'atreides' ? 'Вы строите' : 'ИИ строит'}: ${typeRu(type)}`)
@@ -628,19 +655,32 @@ function findNearestSpice(s: GameState, x: number, y: number, range = 30): { x: 
 }
 
 function findNearestFriendlyBuilding(s: GameState, x: number, y: number, owner: Faction): Building | null {
-  // Prefer refinery (spice processing), fallback to palace
-  let bestRefinery: Building | null = null
-  let bestRefineryD = 99
-  let bestPalace: Building | null = null
-  let bestPalaceD = 99
+  // Only refinery can unload harvesters now
+  return findNearestRefinery(s, x, y, owner)
+}
+
+function findNearestRefinery(s: GameState, x: number, y: number, owner: Faction): Building | null {
+  let best: Building | null = null
+  let bestD = 99
   for (const b of s.buildings) {
-    if (b.owner !== owner) continue
+    if (b.owner !== owner || b.type !== 'refinery') continue
     const cx = b.x + b.w / 2, cy = b.y + b.h / 2
     const d = dist(x, y, cx, cy)
-    if (b.type === 'refinery' && d < bestRefineryD) { bestRefineryD = d; bestRefinery = b }
-    if (b.type === 'palace' && d < bestPalaceD) { bestPalaceD = d; bestPalace = b }
+    if (d < bestD) { bestD = d; best = b }
   }
-  return bestRefinery || bestPalace
+  return best
+}
+
+function findNearestPalace(s: GameState, x: number, y: number, owner: Faction): Building | null {
+  let best: Building | null = null
+  let bestD = 99
+  for (const b of s.buildings) {
+    if (b.owner !== owner || b.type !== 'palace') continue
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2
+    const d = dist(x, y, cx, cy)
+    if (d < bestD) { bestD = d; best = b }
+  }
+  return best
 }
 
 function updateUnits(s: GameState) {
@@ -653,12 +693,29 @@ function updateUnits(s: GameState) {
     const speed = cfg.speed * spdMult
     const dmg = cfg.dmg * dmgMult
 
-    // harvester AI
+    // harvester AI — unload ONLY at refinery (spice plant)
     if (u.type === 'harvester') {
       if (u.state === 'idle') {
         if (u.cargo >= u.maxCargo) {
-          const b = findNearestFriendlyBuilding(s, u.x, u.y, u.owner)
-          if (b) { u.tx = b.x + b.w/2; u.ty = b.y + b.h/2; u.state = 'return' }
+          // full — must go to a refinery. If none exists, wait at base.
+          const refinery = findNearestRefinery(s, u.x, u.y, u.owner)
+          if (refinery) {
+            u.tx = refinery.x + refinery.w/2
+            u.ty = refinery.y + refinery.h/2
+            u.state = 'return'
+          } else {
+            // no refinery — go to palace and wait
+            const palace = findNearestPalace(s, u.x, u.y, u.owner)
+            if (palace) {
+              const d = dist(u.x, u.y, palace.x + palace.w/2, palace.y + palace.h/2)
+              if (d > 3) {
+                u.tx = palace.x + palace.w/2
+                u.ty = palace.y + palace.h/2
+                u.state = 'return'
+              }
+              // else: stay idle and wait (wait for refinery to be built)
+            }
+          }
         } else {
           const sp = findNearestSpice(s, u.x, u.y)
           if (sp) { u.tx = sp.x; u.ty = sp.y; u.state = 'harvest' }
@@ -680,25 +737,47 @@ function updateUnits(s: GameState) {
               s.terrainVersion++
             }
             if (u.cargo >= u.maxCargo) {
-              const b = findNearestFriendlyBuilding(s, u.x, u.y, u.owner)
-              if (b) { u.tx = b.x + b.w/2; u.ty = b.y + b.h/2; u.state = 'return' }
-              else u.state = 'idle'
+              // full — find refinery
+              const refinery = findNearestRefinery(s, u.x, u.y, u.owner)
+              if (refinery) {
+                u.tx = refinery.x + refinery.w/2
+                u.ty = refinery.y + refinery.h/2
+                u.state = 'return'
+              } else {
+                u.state = 'idle' // will wait at base
+              }
             }
           }
         } else {
           moveToward(s, u, u.tx, u.ty, speed)
         }
       } else if (u.state === 'return') {
+        // Check if target is a refinery (only refinery can unload)
+        const targetBld = s.buildings.find(b => b.x + b.w/2 === u.tx && b.y + b.h/2 === u.ty && b.owner === u.owner)
+        if (targetBld && targetBld.type !== 'refinery') {
+          // target is palace but no refinery — just wait nearby (don't unload)
+          const d = dist(u.x, u.y, u.tx, u.ty)
+          if (d < 3) {
+            u.state = 'idle' // wait at base for refinery
+          } else {
+            moveToward(s, u, u.tx, u.ty, speed)
+          }
+          continue
+        }
+        // Check if another harvester is already unloading at this refinery
+        const unloadingAtRefinery = s.units.some(o => o.id !== u.id && o.type === 'harvester' && o.owner === u.owner && o.state === 'return' && o.tx === u.tx && o.ty === u.ty && dist(o.x, o.y, u.tx, u.ty) < 2)
         const d = dist(u.x, u.y, u.tx, u.ty)
-        if (d < 1.5) {
-          // gradual unloading — convert spice to credits over time
-          const unloadRate = 8 // spice per tick
+        if (unloadingAtRefinery && d < 3) {
+          // wait — another harvester is unloading
+          // stay in place (idle movement)
+        } else if (d < 1.5) {
+          // unload gradually
+          const unloadRate = 8
           const unload = Math.min(u.cargo, unloadRate)
           const credits = unload * 5
           u.cargo -= unload
           s.players[u.owner].credits += credits
           if (u.owner === 'atreides' && credits > 0) {
-            // floating text effect via event (throttled)
             if (s.tick % 4 === 0) logEvent(s, 'spice', `+${credits}$ (переработка)`)
           }
           if (u.cargo <= 0) {
@@ -1070,7 +1149,7 @@ function updateWorms(s: GameState) {
 
 // ---------- Fog of war ----------
 const VISION_RANGES: Record<string, number> = {
-  palace: 5, barracks: 3, factory: 3, turret: 4, refinery: 3, generator: 3,
+  palace: 5, barracks: 3, factory: 3, turret: 4, refinery: 3, generator: 3, radar: 12,
   harvester: 3, soldier: 4, tank: 4,
 }
 function updateFog(s: GameState) {
@@ -1084,7 +1163,7 @@ function updateFog(s: GameState) {
   }
   for (const b of s.buildings) {
     if (b.owner !== 'atreides') continue
-    const r = VISION_RANGES[b.type] || 3
+    const r = getVisionRange(b)
     reveal(s, b.x + b.w / 2, b.y + b.h / 2, r)
     // reveal footprint tiles
     for (let dy = 0; dy < b.h; dy++) for (let dx = 0; dx < b.w; dx++) {
@@ -1142,6 +1221,21 @@ function updateAI(s: GameState) {
   }
   if (!hasBarracks && player.credits >= CONFIG.barracks.cost) tryAIBuild(s, owner, 'barracks', palace)
   if (hasBarracks && !hasFactory && player.credits >= CONFIG.factory.cost) tryAIBuild(s, owner, 'factory', palace)
+  // build refinery for spice processing
+  if (harvesters.length >= 1 && !myBldgs.some(b => b.type === 'refinery') && player.credits >= CONFIG.refinery.cost) {
+    tryAIBuild(s, owner, 'refinery', palace)
+  }
+  // build radar for fog of war reveal
+  if (!myBldgs.some(b => b.type === 'radar') && player.credits >= CONFIG.radar.cost && myBldgs.length >= 3) {
+    tryAIBuild(s, owner, 'radar', palace)
+  }
+  // upgrade generators
+  for (const gen of myBldgs.filter(b => b.type === 'generator' && b.level < 3)) {
+    const upCost = CONFIG.generator.upgradeCost * gen.level
+    if (player.credits >= upCost + 100 && player.energyDemand > player.energyMax * 0.6) {
+      upgradeGenerator(s, gen); break
+    }
+  }
   if (army.length < 3 && player.credits >= CONFIG.turret.cost && myBldgs.filter(b => b.type === 'turret').length < 2) {
     tryAIBuild(s, owner, 'turret', palace)
   }
@@ -1183,7 +1277,7 @@ function tryAIBuild(s: GameState, owner: Faction, type: BuildingType, near: Buil
 // ---------- Russian names ----------
 export function typeRu(t: string): string {
   const m: Record<string,string> = {
-    palace:'Дворец', barracks:'Казармы', factory:'Фабрика', turret:'Турель', refinery:'Спайс-завод', generator:'Генератор',
+    palace:'Дворец', barracks:'Казармы', factory:'Фабрика', turret:'Турель', refinery:'Спайс-завод', generator:'Генератор', radar:'Радар',
     harvester:'Доставщик', soldier:'Солдат', tank:'Танк',
   }
   return m[t] || t
@@ -1192,7 +1286,7 @@ export function unitName(t: UnitType): string {
   return { harvester: 'доставщик', soldier: 'солдат', tank: 'танк' }[t]
 }
 export function bldName(t: BuildingType): string {
-  return { palace: 'дворец', barracks: 'казармы', factory: 'фабрику', turret: 'турель', refinery: 'спайс-завод', generator: 'генератор' }[t]
+  return { palace: 'дворец', barracks: 'казармы', factory: 'фабрику', turret: 'турель', refinery: 'спайс-завод', generator: 'генератор', radar: 'радар' }[t]
 }
 export function factionRu(f: Faction): string {
   return { atreides: 'Атрейдес', harkonnen: 'Харконнен', ordos: 'Ордос', neutral: 'Нейтрал' }[f]

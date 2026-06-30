@@ -549,7 +549,7 @@ export const FACTION_COLORS = {
 export type Faction = keyof typeof FACTION_COLORS
 
 // ---------- Building rendering (detailed, volumetric) ----------
-export type BuildingType = 'palace' | 'barracks' | 'factory' | 'turret' | 'refinery' | 'generator'
+export type BuildingType = 'palace' | 'barracks' | 'factory' | 'turret' | 'refinery' | 'generator' | 'radar'
 
 const buildingCache = new Map<string, HTMLCanvasElement>()
 
@@ -572,6 +572,7 @@ function getWallH(type: BuildingType): number {
     case 'refinery':  return 40
     case 'generator': return 42
     case 'turret':    return 20
+    case 'radar':     return 30
   }
 }
 
@@ -1309,6 +1310,44 @@ function renderBuilding(type: BuildingType, faction: Faction, w: number, h: numb
   ctx.lineTo(cx, cy + dh)
   ctx.lineTo(cx + dw, cy)
   ctx.stroke()
+
+  // RADAR: rotating dish + comm array — reveals fog of war
+  if (type === 'radar') {
+    // tall central mast
+    ctx.fillStyle = '#3a3a3a'
+    ctx.fillRect(roofCx - 2, roofCy - 50, 4, 50)
+    // radar dish (ellipse) on top — cyan glow
+    ctx.fillStyle = '#1a4a5a'
+    ctx.beginPath()
+    ctx.ellipse(roofCx, roofCy - 50, 18, 8, 0, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = col.light; ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.ellipse(roofCx, roofCy - 50, 18, 8, 0, 0, Math.PI * 2)
+    ctx.stroke()
+    // dish inner glow
+    const dishGrad = ctx.createRadialGradient(roofCx, roofCy - 50, 0, roofCx, roofCy - 50, 16)
+    dishGrad.addColorStop(0, 'rgba(0,255,200,0.6)')
+    dishGrad.addColorStop(1, 'rgba(0,255,200,0)')
+    ctx.fillStyle = dishGrad
+    ctx.beginPath()
+    ctx.ellipse(roofCx, roofCy - 50, 16, 7, 0, 0, Math.PI * 2)
+    ctx.fill()
+    // beacon light on top (red blinking)
+    ctx.fillStyle = '#ff3030'
+    ctx.beginPath(); ctx.arc(roofCx, roofCy - 56, 2, 0, Math.PI * 2); ctx.fill()
+    // side antenna arrays on walls
+    wallQuadFill(ctx, cx, cy, dw, dh, wallH, 'left', 0.6, 0.2, 0.7, 0.8, '#1a1a1a')
+    wallQuadFill(ctx, cx, cy, dw, dh, wallH, 'right', 0.3, 0.2, 0.4, 0.8, '#1a1a1a')
+    // small slit windows (cyan)
+    for (const row of [0.25, 0.5, 0.7]) {
+      wallQuadFill(ctx, cx, cy, dw, dh, wallH, 'left', 0.2, row, 0.3, row + 0.04, '#00d0ff')
+      wallQuadFill(ctx, cx, cy, dw, dh, wallH, 'right', 0.7, row, 0.8, row + 0.04, '#00d0ff')
+    }
+    // faction stripe at base
+    wallQuadFill(ctx, cx, cy, dw, dh, wallH, 'left', 0, 0.88, 1, 0.94, col.primary)
+    wallQuadFill(ctx, cx, cy, dw, dh, wallH, 'right', 0, 0.88, 1, 0.94, col.primary)
+  }
 
   buildingCache.set(key, c)
   return c

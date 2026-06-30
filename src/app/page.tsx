@@ -26,7 +26,7 @@ import {
 import {
   createGame, tick, CONFIG, BUILD_COSTS, FOOTPRINT, RESEARCH, type GameState, type Unit, type Building,
   canBuild, placeBuilding, queueUnit, commandMove, commandAttack,
-  cancelQueueItem, startResearch, cancelResearch, getUpgrade,
+  cancelQueueItem, startResearch, cancelResearch, getUpgrade, upgradeGenerator,
   idx, isWalkable, isBuildable, buildingAt, dist, inBounds,
   pickUnitAt, pickBuildingAt, hasPower,
   typeRu, unitName, bldName, factionRu,
@@ -960,12 +960,32 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
                       </div>
                     )}
                     {selBld.type === 'generator' && (
-                      <div className="text-xs text-cyan-400 flex items-center gap-1"><Zap className="w-3 h-3"/> Производит: +{CONFIG.generator.energyOutput} энергии</div>
+                      <>
+                        <div className="text-xs text-cyan-400 flex items-center gap-1">
+                          <Zap className="w-3 h-3"/> Производит: +{CONFIG.generator.energyOutput * selBld.level} энергии (ур. {selBld.level})
+                        </div>
+                        {selBld.level < 3 && selBld.hp >= selBld.maxHp * 0.5 && (
+                          <Button size="sm" className="w-full bg-cyan-700 hover:bg-cyan-600"
+                            disabled={s.players.atreides.credits < CONFIG.generator.upgradeCost * selBld.level}
+                            onClick={() => {
+                              if (upgradeGenerator(s, selBld)) { forceRender(n=>n+1); toast.success(`Генератор: уровень ${selBld.level}`) }
+                              else toast.error('Недостаточно средств')
+                            }}>
+                            <Zap className="w-3 h-3 mr-1"/> Улучшить до ур.{selBld.level + 1} ({CONFIG.generator.upgradeCost * selBld.level}$)
+                          </Button>
+                        )}
+                      </>
+                    )}
+                    {selBld.type === 'radar' && (
+                      <div className="text-xs text-green-400 space-y-0.5">
+                        <div className="flex items-center gap-1"><Eye className="w-3 h-3"/> Радар: открывает туман войны</div>
+                        <div className="text-[10px] text-neutral-500">Радиус обзора: {CONFIG.radar.visionRange} тайлов</div>
+                      </div>
                     )}
                     {selBld.type === 'refinery' && (
                       <div className="text-xs text-orange-400 space-y-0.5">
                         <div>🏭 Переработка спайса → кредиты</div>
-                        <div className="text-[10px] text-neutral-500">Доставщики разгружаются здесь. Без спайс-завода — только во дворец (медленно).</div>
+                        <div className="text-[10px] text-neutral-500">Доставщики разгружаются ТОЛЬКО здесь. Постройте, чтобы получать доход со спайса.</div>
                       </div>
                     )}
                     {selBld.type === 'turret' && (
@@ -989,7 +1009,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
                   {([
                     ['generator', CONFIG.generator.cost], ['barracks', CONFIG.barracks.cost],
                     ['factory', CONFIG.factory.cost], ['turret', CONFIG.turret.cost],
-                    ['refinery', CONFIG.refinery.cost],
+                    ['refinery', CONFIG.refinery.cost], ['radar', CONFIG.radar.cost],
                   ] as [BuildingType, number][]).map(([t, cost]) => {
                     const can = s.players.atreides.credits >= cost
                     return (
