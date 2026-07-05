@@ -616,13 +616,10 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
 
   // ---- Pointer events (unified mouse + touch) ----
   const handlePointerDown = (e: React.PointerEvent) => {
-    // Middle mouse = pan
     if (e.button === 1) {
       mousePanRef.current = {x:e.clientX, y:e.clientY, panning:true}
-      e.preventDefault()
       return
     }
-    // Left click / single touch
     if (e.button !== 0 && e.pointerType !== 'touch') return
     const ps = pointerStateRef.current
     ps.startX = e.clientX
@@ -631,7 +628,6 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
     ps.lastY = e.clientY
     ps.moved = false
     ps.isDown = true
-    e.preventDefault()
   }
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -687,7 +683,6 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
       } else {
         setBuildMode(null)
       }
-      forceRender(n=>n+1); return
     }
 
     // 2. Check what's at tap point
@@ -701,16 +696,13 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
       if (tappedBld) {
         setSelected({ type:'building', id:tappedBld.id })
         setPanelOpen(true)
-        forceRender(n=>n+1); return
       }
       if (tappedUnit) {
         setSelected({ type:'unit', id:tappedUnit.id })
-        forceRender(n=>n+1); return
       }
       // tap on empty → deselect
       setSelected(null)
       setPanelOpen(false)
-      forceRender(n=>n+1); return
     }
 
     // 4. If a UNIT is selected
@@ -720,36 +712,30 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
         // tap on same unit → toggle panel
         if (tappedUnit && tappedUnit.id === u.id) {
           setPanelOpen(p => !p)
-          forceRender(n=>n+1); return
         }
         // tap on another friendly unit → switch selection (no panel)
         if (tappedUnit) {
           setSelected({ type:'unit', id:tappedUnit.id })
-          forceRender(n=>n+1); return
         }
         // tap on friendly building → switch selection + open panel
         if (tappedBld) {
           setSelected({ type:'building', id:tappedBld.id })
           setPanelOpen(true)
-          forceRender(n=>n+1); return
         }
         // tap on enemy → attack order
         if (tappedEnemy && tappedEnemy.owner !== 'atreides') {
           commandAttack(s, u, tappedEnemy.id, false)
           setPanelOpen(false)
-          forceRender(n=>n+1); return
         }
         if (tappedEnemyBld && tappedEnemyBld.owner !== 'atreides') {
           commandAttack(s, u, tappedEnemyBld.id, true)
           setPanelOpen(false)
-          forceRender(n=>n+1); return
         }
         // tap on empty map → move order
         if (u.type !== 'harvester') {
           commandMove(s, u, cell.x+0.5, cell.y+0.5)
         }
         setPanelOpen(false)
-        forceRender(n=>n+1); return
       }
     }
 
@@ -764,7 +750,6 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
     } else {
       // empty → nothing
     }
-    forceRender(n=>n+1)
   }
 
   // Deselect function (called by ✕ button in HUD or Esc)
@@ -999,7 +984,6 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
     } else {
       commandMove(s, u, cell.x+0.5, cell.y+0.5)
     }
-    forceRender(n=>n+1)
   }
 
   const handleBuild = (type: BuildingType) => {
@@ -1022,7 +1006,6 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
     if (!hasPower(s, 'atreides')) { return }
     if (queueUnit(s, b, type)) { /* ok — event logged in engine */ }
     
-    forceRender(n=>n+1)
   }
 
   const s = gameRef.current
@@ -1155,7 +1138,6 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
                         const s = gameRef.current
                         s.units = s.units.filter(u => u.id !== selUnit.id)
                         setSelected(null)
-                        forceRender(n=>n+1)
                       }}>
                       <Trash2 className="w-3.5 h-3.5 mr-1.5"/> Уничтожить
                     </Button>
@@ -1192,7 +1174,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
                       <div className="space-y-1">
                         <div className="text-[10px] text-neutral-500 uppercase">Очередь (тап — отмена):</div>
                         {selBld.queue.map((q, i) => (
-                          <button key={i} onClick={() => { cancelQueueItem(s, selBld, i); forceRender(n=>n+1) }}
+                          <button key={i} onClick={() => { cancelQueueItem(s, selBld, i) }}
                             className="w-full flex items-center gap-1.5 p-1.5 rounded bg-neutral-700/60 hover:bg-red-900/60 text-left transition-colors group touch-manipulation">
                             <img src={getUnitPreview(q.type, 'atreides', 20)} alt="" className="w-5 h-5"/>
                             <div className="flex-1">
@@ -1225,7 +1207,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
                             const researched = isTechResearched(s, 'atreides', tech.id)
                             const can = s.players.atreides.credits >= tech.cost && !researched
                             return (
-                              <button key={tech.id} onClick={() => { if (startTechResearch(s, selBld, tech.id)) forceRender(n=>n+1) }}
+                              <button key={tech.id} onClick={() => { if (startTechResearch(s, selBld, tech.id)) {} }}
                                 disabled={!can}
                                 className={`w-full text-left p-2 rounded text-[11px] transition-colors touch-manipulation ${researched ? 'bg-green-900/30 opacity-60' : can ? 'bg-neutral-700/60 hover:bg-purple-900/40' : 'bg-neutral-900 opacity-40'}`}>
                                 <div className="flex justify-between">
@@ -1264,7 +1246,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
                             if (getUpgrade(s, 'atreides', u.id) > 1) return false
                             return true
                           }).map(u => (
-                            <button key={u.id} onClick={() => { if (startBuildingUpgrade(s, selBld, u.id)) forceRender(n=>n+1) }}
+                            <button key={u.id} onClick={() => { if (startBuildingUpgrade(s, selBld, u.id)) {} }}
                               disabled={s.players.atreides.credits < u.cost}
                               className={`w-full text-left p-2 rounded text-[11px] transition-colors touch-manipulation ${s.players.atreides.credits >= u.cost ? 'bg-neutral-700/60 hover:bg-cyan-900/40' : 'bg-neutral-900 opacity-40'}`}>
                               <div className="flex justify-between">
@@ -1294,7 +1276,6 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
                           <Button size="sm" className="w-full h-9 bg-cyan-700 hover:bg-cyan-600 touch-manipulation"
                             disabled={s.players.atreides.credits < CONFIG.generator.upgradeCost * selBld.level}
                             onClick={() => {
-                              if (upgradeGenerator(s, selBld)) { forceRender(n=>n+1) }
                             }}>
                             <Zap className="w-3 h-3 mr-1"/> Улучшить → ур.{selBld.level + 1} ({CONFIG.generator.upgradeCost * selBld.level}$)
                           </Button>
@@ -1351,7 +1332,6 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
                           <Button size="sm" className="w-full h-9 bg-amber-700 hover:bg-amber-600 touch-manipulation"
                             disabled={s.players.atreides.credits < CONFIG.turret.upgradeCost * selBld.level}
                             onClick={() => {
-                              if (upgradeTurret(s, selBld)) { forceRender(n=>n+1) }
                             }}>
                             <ChevronUp className="w-3 h-3 mr-1"/> Улучшить → ур.{selBld.level + 1} ({CONFIG.turret.upgradeCost * selBld.level}$)
                           </Button>
