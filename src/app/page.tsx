@@ -631,7 +631,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
     ps.lastY = e.clientY
     ps.moved = false
     ps.isDown = true
-    ps.isTwoFinger = false
+    e.preventDefault()
   }
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -1088,36 +1088,12 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
       <div className="flex-1 flex overflow-hidden min-h-0">
         <main className="flex-1 overflow-hidden bg-black relative" ref={canvasWrapRef} style={{ touchAction: 'none' }}>
           <canvas ref={canvasRef}
-            onMouseDown={(e) => { if (e.button === 1) { mousePanRef.current = {x:e.clientX, y:e.clientY, panning:true}; e.preventDefault() } }}
             onPointerDown={handlePointerDown}
             onContextMenu={handleRightClick}
             onWheel={onWheel}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
-            onMouseMove={e => {
-              // middle-mouse pan
-              if (mousePanRef.current?.panning) {
-                const dx = e.clientX - mousePanRef.current.x
-                const dy = e.clientY - mousePanRef.current.y
-                mousePanRef.current.x = e.clientX
-                mousePanRef.current.y = e.clientY
-                setPan(p => { const np = {x: p.x + dx, y: p.y + dy}; panRef.current = np; return np })
-                return
-              }
-              const c = cellFromEvt(e); setHoverCell(c)
-              const pt = pointFromEvt(e)
-              const s2 = gameRef.current
-              const hovering = pickUnitAt(s2, pt.x, pt.y, undefined, 1.5) || pickBuildingAt(s2, pt.x, pt.y)
-              const canvas = canvasRef.current
-              if (canvas) {
-                if (buildMode) canvas.style.cursor = 'crosshair'
-                else if (hovering) canvas.style.cursor = 'pointer'
-                else if (selectedRef.current?.type === 'unit') canvas.style.cursor = 'move'
-                else canvas.style.cursor = 'default'
-              }
-            }}
-            onMouseUp={() => { if (mousePanRef.current) mousePanRef.current.panning = false }}
-            onMouseLeave={() => { setHoverCell(null); if (mousePanRef.current) mousePanRef.current.panning = false }}
+            onPointerLeave={() => { setHoverCell(null); if (mousePanRef.current) mousePanRef.current.panning = false }}
             className="block" style={{ width: '100%', height: '100%', objectFit: 'contain', cursor: 'default', touchAction: 'none' }} />
           {/* CRT retro overlay */}
           <div className="pointer-events-none absolute inset-0 crt-overlay" />
