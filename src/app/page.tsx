@@ -543,7 +543,8 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
   // mouse middle-button pan
   const mousePanRef = useRef<{x:number;y:number;panning:boolean} | null>(null)
   // Pointer events (unified mouse + touch)
-  const pointerStateRef = useRef<{startX:number;startY:number;lastX:number;lastY:number;moved:boolean;isDown:boolean;isTwoFinger:boolean;pinchDist:number}>({startX:0,startY:0,lastX:0,lastY:0,moved:false,isDown:false,isTwoFinger:false,pinchDist:0})
+  // lastTouchTime dedups mouse compat events that fire after touch on mobile
+  const pointerStateRef = useRef<{startX:number;startY:number;lastX:number;lastY:number;moved:boolean;isDown:boolean;isTwoFinger:boolean;pinchDist:number;lastTouchTime:number}>({startX:0,startY:0,lastX:0,lastY:0,moved:false,isDown:false,isTwoFinger:false,pinchDist:0,lastTouchTime:0})
   // touch state: track single-finger drag for pan vs tap
   const touchStateRef = useRef<{startX:number, startY:number, lastX:number, lastY:number, moved:boolean, startTime:number}>({startX:0, startY:0, lastX:0, lastY:0, moved:false, startTime:0})
 
@@ -621,6 +622,11 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
       return
     }
     if (e.button !== 0 && e.pointerType !== 'touch') return
+    // Suppress mouse compat events that fire ~300ms after a touch tap
+    // (prevents double-firing of handleTap on mobile → panel flicker)
+    if (e.pointerType === 'mouse' && pointerStateRef.current.lastTouchTime && Date.now() - pointerStateRef.current.lastTouchTime < 800) {
+      return
+    }
     const ps = pointerStateRef.current
     ps.startX = e.clientX
     ps.startY = e.clientY
@@ -657,6 +663,11 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
     if (!ps.isDown) return
     ps.isDown = false
 
+    // Record touch time so subsequent mouse compat events can be suppressed
+    if (e.pointerType === 'touch') {
+      ps.lastTouchTime = Date.now()
+    }
+
     if (mousePanRef.current) {
       mousePanRef.current.panning = false
     }
@@ -669,6 +680,9 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
   }
 
   // Unified tap/click handler — used by both mouse and touch
+  // IMPORTANT: each branch must `return` so only ONE path runs per tap.
+  // Previous version used sequential `if` blocks which caused the panel to
+  // flicker/close because later blocks overrode earlier state updates.
   const handleTap = (e: any) => {
     const s = gameRef.current
     const cell = cellFromEvt(e); if (!cell) return
@@ -676,70 +690,77 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
     const sel = selectedRef.current
     const bm = buildModeRef.current
 
-    // 1. Build mode — place or cancel
+    // 1. Build mode — place or cancel (always returns)
     if (bm) {
-      if (placeBuilding(s, 'atreides', bm, cell.x, cell.y)) {
-        setBuildMode(null)
-      } else {
-        setBuildMode(null)
-      }
+      placeBuilding(s, 'atreides', bm, cell.x, cell.y)
+      setBuildMode(null)
+      return
     }
 
-    // 2. Check what's at tap point
-    const tappedUnit = pickUnitAt(s, pt.x, pt.y, 'atreides', 1.5)
-    const tappedBld = tappedUnit ? null : pickBuildingAt(s, pt.x, pt.y, 'atreides')
-    const tappedEnemy = tappedUnit ? null : pickUnitAt(s, pt.x, pt.y, undefined, 1.5)
-    const tappedEnemyBld = (tappedUnit || tappedBld) ? null : pickBuildingAt(s, pt.x, pt.y)
+    // 2. Determine what's at the tap point
+    // Priority: friendly building > friendly unit > enemy unit > enemy building
+    // (buildings are large & stationary — they must take priority over nearby
+    // wandering units, otherwise a harvester near the Palace steals the click
+    // and the selection panel flickers closed)
+    const tappedBld = pickBuildingAt(s, pt.x, pt.y, 'atreides')
+    const tappedUnit = tappedBld ? null : pickUnitAt(s, pt.x, pt.y, 'atreides', 1.5)
+    const tappedEnemy = (tappedBld || tappedUnit) ? null : pickUnitAt(s, pt.x, pt.y, undefined, 1.5)
+    const tappedEnemyBld = (tappedBld || tappedUnit || tappedEnemy) ? null : pickBuildingAt(s, pt.x, pt.y)
 
-    // 3. If a BUILDING is selected → tap empty = deselect, tap building = switch
+    // 3. A BUILDING is currently selected
     if (sel?.type === 'building') {
       if (tappedBld) {
+        // switch to another (or same) building — panel stays open
         setSelected({ type:'building', id:tappedBld.id })
         setPanelOpen(true)
-      }
-      if (tappedUnit) {
+      } else if (tappedUnit) {
+        // select a friendly unit instead — close panel (units open panel on 2nd tap)
         setSelected({ type:'unit', id:tappedUnit.id })
-      }
-      // tap on empty → deselect
-      setSelected(null)
-      setPanelOpen(false)
-    }
-
-    // 4. If a UNIT is selected
-    if (sel?.type === 'unit') {
-      const u = s.units.find(u=>u.id===sel.id)
-      if (u) {
-        // tap on same unit → toggle panel
-        if (tappedUnit && tappedUnit.id === u.id) {
-          setPanelOpen(p => !p)
-        }
-        // tap on another friendly unit → switch selection (no panel)
-        if (tappedUnit) {
-          setSelected({ type:'unit', id:tappedUnit.id })
-        }
-        // tap on friendly building → switch selection + open panel
-        if (tappedBld) {
-          setSelected({ type:'building', id:tappedBld.id })
-          setPanelOpen(true)
-        }
-        // tap on enemy → attack order
-        if (tappedEnemy && tappedEnemy.owner !== 'atreides') {
-          commandAttack(s, u, tappedEnemy.id, false)
-          setPanelOpen(false)
-        }
-        if (tappedEnemyBld && tappedEnemyBld.owner !== 'atreides') {
-          commandAttack(s, u, tappedEnemyBld.id, true)
-          setPanelOpen(false)
-        }
-        // tap on empty map → move order
-        if (u.type !== 'harvester') {
-          commandMove(s, u, cell.x+0.5, cell.y+0.5)
-        }
+        setPanelOpen(false)
+      } else {
+        // tap on empty / enemy → deselect & close panel
+        setSelected(null)
         setPanelOpen(false)
       }
+      return
     }
 
-    // 5. Nothing selected
+    // 4. A UNIT is currently selected
+    if (sel?.type === 'unit') {
+      const u = s.units.find(u => u.id === sel.id)
+      if (!u) {
+        // selected unit no longer exists — clear and fall through to "nothing selected"
+        setSelected(null)
+        setPanelOpen(false)
+      } else {
+        if (tappedUnit && tappedUnit.id === u.id) {
+          // tap same unit → toggle panel
+          setPanelOpen(p => !p)
+        } else if (tappedUnit) {
+          // tap another friendly unit → switch selection (no panel)
+          setSelected({ type:'unit', id:tappedUnit.id })
+        } else if (tappedBld) {
+          // tap friendly building → switch selection + open panel
+          setSelected({ type:'building', id:tappedBld.id })
+          setPanelOpen(true)
+        } else if (tappedEnemy && tappedEnemy.owner !== 'atreides') {
+          commandAttack(s, u, tappedEnemy.id, false)
+          setPanelOpen(false)
+        } else if (tappedEnemyBld && tappedEnemyBld.owner !== 'atreides') {
+          commandAttack(s, u, tappedEnemyBld.id, true)
+          setPanelOpen(false)
+        } else {
+          // tap on empty map → move order (harvesters auto-harvest, ignore)
+          if (u.type !== 'harvester') {
+            commandMove(s, u, cell.x + 0.5, cell.y + 0.5)
+          }
+          setPanelOpen(false)
+        }
+        return
+      }
+    }
+
+    // 5. Nothing selected (or selection was just cleared above)
     if (tappedBld) {
       // building → select + open panel immediately
       setSelected({ type:'building', id:tappedBld.id })
@@ -747,9 +768,8 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
     } else if (tappedUnit) {
       // unit → select (no panel — opens on 2nd tap)
       setSelected({ type:'unit', id:tappedUnit.id })
-    } else {
-      // empty → nothing
     }
+    // empty → nothing
   }
 
   // Deselect function (called by ✕ button in HUD or Esc)
