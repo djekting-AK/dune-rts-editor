@@ -549,7 +549,7 @@ export const FACTION_COLORS = {
 export type Faction = keyof typeof FACTION_COLORS
 
 // ---------- Building rendering (detailed, volumetric) ----------
-export type BuildingType = 'palace' | 'barracks' | 'factory' | 'turret' | 'refinery' | 'generator' | 'radar'
+export type BuildingType = 'palace' | 'barracks' | 'factory' | 'turret' | 'refinery' | 'generator' | 'radar' | 'techlab'
 
 const buildingCache = new Map<string, HTMLCanvasElement>()
 
@@ -573,6 +573,8 @@ function getWallH(type: BuildingType): number {
     case 'generator': return 42
     case 'turret':    return 20
     case 'radar':     return 30
+    case 'techlab':   return 35
+    default:          return 30
   }
 }
 
@@ -639,8 +641,8 @@ function wallQuadFill(ctx: CanvasRenderingContext2D, cx: number, cy: number, dw:
   ctx.fill()
 }
 
-function renderBuilding(type: BuildingType, faction: Faction, w: number, h: number): HTMLCanvasElement {
-  const key = `${type}_${faction}_${w}x${h}`
+function renderBuilding(type: BuildingType, faction: Faction, w: number, h: number, level = 1): HTMLCanvasElement {
+  const key = `${type}_${faction}_${w}x${h}_L${level}`
   let c = buildingCache.get(key)
   if (c) return c
   c = document.createElement('canvas')
@@ -652,7 +654,7 @@ function renderBuilding(type: BuildingType, faction: Faction, w: number, h: numb
   c.width = CW; c.height = CH
   const ctx = c.getContext('2d')!
   const col = FACTION_COLORS[faction]
-  const rng = mulberry((type.charCodeAt(0) * 7919) ^ (faction.charCodeAt(0) * 4099) ^ (w * 131) ^ (h * 257))
+  const rng = mulberry((type.charCodeAt(0) * 7919) ^ (faction.charCodeAt(0) * 4099) ^ (w * 131) ^ (h * 257) ^ (level * 31))
 
   // ============================================================
   //  1. GROUND SHADOW (slightly offset, darker diamond beneath)
@@ -1218,17 +1220,22 @@ function renderBuilding(type: BuildingType, faction: Faction, w: number, h: numb
     ctx.fillRect(roofCx - 4, roofCy - dh * 0.5 - 14, 8, 8)
   }
   else if (type === 'turret') {
-    // ===== TURRET: compact energy cannon (1x1) =====
-    // Walls: small vision slits, reinforced panel seams.
-    // Roof:  octagonal base pad, gun barrel pointing up, glowing core.
+    // ===== TURRET: 3-tier weapon system (1x1) =====
+    // L1: machine gun (yellow tracers)
+    // L2: armor-piercing dual cannon (orange tracers, bigger muzzle flash)
+    // L3: laser energy cannon (cyan beam, glowing core, no barrels)
+    const tier = Math.max(1, Math.min(3, level || 1))
+    // tier accent color (used for vision slit, power cell, muzzle glow, status lights)
+    const tierAccent    = tier === 3 ? '#00d0ff' : tier === 2 ? '#ff8030' : '#ffe060'
+    const tierAccentRgb = tier === 3 ? '0,208,255' : tier === 2 ? '255,128,48' : '255,224,96'
 
-    // --- Right wall: vision slit + reinforced seams ---
-    wallQuadFill(ctx, cx, cy, dw, dh, wallH, 'right', 0.35, 0.40, 0.65, 0.50, '#00d0ff')
+    // --- Right wall: vision slit (tier-colored) + reinforced seams ---
+    wallQuadFill(ctx, cx, cy, dw, dh, wallH, 'right', 0.35, 0.40, 0.65, 0.50, tierAccent)
     wallQuadFill(ctx, cx, cy, dw, dh, wallH, 'right', 0.20, 0.05, 0.22, 0.85, '#1a1a1a')
     wallQuadFill(ctx, cx, cy, dw, dh, wallH, 'right', 0.78, 0.05, 0.80, 0.85, '#1a1a1a')
 
     // --- Left wall: vision slit + reinforced seams ---
-    wallQuadFill(ctx, cx, cy, dw, dh, wallH, 'left', 0.35, 0.40, 0.65, 0.50, '#00d0ff')
+    wallQuadFill(ctx, cx, cy, dw, dh, wallH, 'left', 0.35, 0.40, 0.65, 0.50, tierAccent)
     wallQuadFill(ctx, cx, cy, dw, dh, wallH, 'left', 0.20, 0.05, 0.22, 0.85, '#1a1a1a')
     wallQuadFill(ctx, cx, cy, dw, dh, wallH, 'left', 0.78, 0.05, 0.80, 0.85, '#1a1a1a')
 
@@ -1241,55 +1248,174 @@ function renderBuilding(type: BuildingType, faction: Faction, w: number, h: numb
     const fY2 = cy + dh - 0.5 * dh - 0.15 * wallH
     ctx.beginPath(); ctx.arc(fX2, fY2, 1.5, 0, Math.PI * 2); ctx.fill()
 
-    // --- Roof: octagonal base pad + gun barrel ---
-    diamondPath(ctx, roofCx, roofCy, dw * 0.7, dh * 0.7)
-    ctx.fillStyle = '#2a2a2a'; ctx.fill()
-    diamondPath(ctx, roofCx, roofCy, dw * 0.6, dh * 0.6)
-    ctx.fillStyle = '#4a4a4a'; ctx.fill()
-    // rivets at 4 corners of pad
-    const rivets: [number, number][] = [
-      [roofCx - dw * 0.6, roofCy], [roofCx + dw * 0.6, roofCy],
-      [roofCx, roofCy - dh * 0.6], [roofCx, roofCy + dh * 0.6],
-    ]
-    for (const [rx, ry] of rivets) {
+    // === Tier-specific roof weapon ===
+    if (tier === 1) {
+      // --- L1: MACHINE GUN — small single barrel, gray metal, simple base ---
+      // octagonal base pad
+      diamondPath(ctx, roofCx, roofCy, dw * 0.7, dh * 0.7)
+      ctx.fillStyle = '#2a2a2a'; ctx.fill()
+      diamondPath(ctx, roofCx, roofCy, dw * 0.6, dh * 0.6)
+      ctx.fillStyle = '#4a4a4a'; ctx.fill()
+      // rivets at 4 corners
+      for (const [rx, ry] of [[roofCx - dw * 0.6, roofCy], [roofCx + dw * 0.6, roofCy], [roofCx, roofCy - dh * 0.6], [roofCx, roofCy + dh * 0.6]] as [number, number][]) {
+        ctx.fillStyle = '#1a1a1a'
+        ctx.beginPath(); ctx.arc(rx, ry, 1, 0, Math.PI * 2); ctx.fill()
+      }
+      // small yellow power cell at center
+      const cellG = ctx.createRadialGradient(roofCx, roofCy, 0, roofCx, roofCy, 3)
+      cellG.addColorStop(0, '#ffffff')
+      cellG.addColorStop(0.5, tierAccent)
+      cellG.addColorStop(1, `rgba(${tierAccentRgb},0)`)
+      ctx.fillStyle = cellG
+      ctx.fillRect(roofCx - 3, roofCy - 3, 6, 6)
+      // thin single gun barrel pointing up
+      const barrelLen = 14
+      ctx.fillStyle = '#3a3a3a'
+      ctx.fillRect(roofCx - 1.5, roofCy - barrelLen, 3, barrelLen)
+      ctx.fillStyle = '#5a5a5a'
+      ctx.fillRect(roofCx - 0.5, roofCy - barrelLen, 1, barrelLen)
+      // mantlet (trapezoidal base where barrel meets pad)
+      ctx.fillStyle = '#2a2a2a'
+      ctx.fillRect(roofCx - 3, roofCy - 4, 6, 4)
+      ctx.fillStyle = '#4a4a4a'
+      ctx.fillRect(roofCx - 2, roofCy - 3, 4, 2)
+      // muzzle ring
       ctx.fillStyle = '#1a1a1a'
-      ctx.beginPath(); ctx.arc(rx, ry, 1, 0, Math.PI * 2); ctx.fill()
+      ctx.fillRect(roofCx - 2, roofCy - barrelLen - 2, 4, 2)
+      // muzzle glow (yellow, small)
+      const muzG = ctx.createRadialGradient(roofCx, roofCy - barrelLen - 1, 0, roofCx, roofCy - barrelLen - 1, 3)
+      muzG.addColorStop(0, '#ffffff')
+      muzG.addColorStop(0.4, tierAccent)
+      muzG.addColorStop(1, `rgba(${tierAccentRgb},0)`)
+      ctx.fillStyle = muzG
+      ctx.fillRect(roofCx - 3, roofCy - barrelLen - 4, 6, 6)
+      // 2 amber status lights at base
+      for (const offX of [-3, 3]) {
+        ctx.fillStyle = '#ffaa30'
+        ctx.beginPath(); ctx.arc(roofCx + offX, roofCy + 2, 0.8, 0, Math.PI * 2); ctx.fill()
+      }
     }
-
-    // Glowing power cell at center of pad
-    const cellG = ctx.createRadialGradient(roofCx, roofCy, 0, roofCx, roofCy, 4)
-    cellG.addColorStop(0, '#ffffff')
-    cellG.addColorStop(0.5, '#00d0ff')
-    cellG.addColorStop(1, 'rgba(0,208,255,0)')
-    ctx.fillStyle = cellG
-    ctx.fillRect(roofCx - 4, roofCy - 4, 8, 8)
-
-    // Gun barrel pointing straight up
-    const barrelLen = 12
-    ctx.fillStyle = '#3a3a3a'
-    ctx.fillRect(roofCx - 2, roofCy - barrelLen, 4, barrelLen)
-    ctx.fillStyle = '#5a5a5a'
-    ctx.fillRect(roofCx - 1, roofCy - barrelLen, 1, barrelLen)
-    // mantlet (trapezoidal base where barrel meets pad)
-    ctx.fillStyle = '#2a2a2a'
-    ctx.fillRect(roofCx - 3, roofCy - 4, 6, 4)
-    ctx.fillStyle = '#4a4a4a'
-    ctx.fillRect(roofCx - 2, roofCy - 3, 4, 2)
-    // muzzle ring at barrel tip
-    ctx.fillStyle = '#1a1a1a'
-    ctx.fillRect(roofCx - 3, roofCy - barrelLen - 2, 6, 2)
-    // muzzle glow (charging tip)
-    const muzG = ctx.createRadialGradient(roofCx, roofCy - barrelLen - 1, 0, roofCx, roofCy - barrelLen - 1, 4)
-    muzG.addColorStop(0, '#ffffff')
-    muzG.addColorStop(0.4, '#00d0ff')
-    muzG.addColorStop(1, 'rgba(0,208,255,0)')
-    ctx.fillStyle = muzG
-    ctx.fillRect(roofCx - 4, roofCy - barrelLen - 5, 8, 8)
-
-    // 2 amber status lights at base of barrel
-    for (const offX of [-3, 3]) {
-      ctx.fillStyle = '#ffaa30'
-      ctx.beginPath(); ctx.arc(roofCx + offX, roofCy + 2, 0.8, 0, Math.PI * 2); ctx.fill()
+    else if (tier === 2) {
+      // --- L2: ARMOR-PIERCING — heavier dual barrels, darker metal, reinforced base, ammo boxes ---
+      // larger, darker base pad (reinforced)
+      diamondPath(ctx, roofCx, roofCy, dw * 0.78, dh * 0.78)
+      ctx.fillStyle = '#1a1a1a'; ctx.fill()
+      diamondPath(ctx, roofCx, roofCy, dw * 0.65, dh * 0.65)
+      ctx.fillStyle = '#3a3a3a'; ctx.fill()
+      // reinforcement band ring outline
+      diamondPath(ctx, roofCx, roofCy, dw * 0.72, dh * 0.72)
+      ctx.strokeStyle = '#5a5a5a'; ctx.lineWidth = 1; ctx.stroke()
+      // rivets at 4 corners (larger, darker)
+      for (const [rx, ry] of [[roofCx - dw * 0.65, roofCy], [roofCx + dw * 0.65, roofCy], [roofCx, roofCy - dh * 0.65], [roofCx, roofCy + dh * 0.65]] as [number, number][]) {
+        ctx.fillStyle = '#0a0a0a'
+        ctx.beginPath(); ctx.arc(rx, ry, 1.3, 0, Math.PI * 2); ctx.fill()
+      }
+      // orange power cell at center (larger)
+      const cellG = ctx.createRadialGradient(roofCx, roofCy, 0, roofCx, roofCy, 4)
+      cellG.addColorStop(0, '#ffffff')
+      cellG.addColorStop(0.5, tierAccent)
+      cellG.addColorStop(1, `rgba(${tierAccentRgb},0)`)
+      ctx.fillStyle = cellG
+      ctx.fillRect(roofCx - 4, roofCy - 4, 8, 8)
+      // 2 ammo boxes on left/right of base
+      for (const side of [-1, 1]) {
+        const bx = roofCx + side * 9
+        ctx.fillStyle = '#3a3a3a'
+        ctx.fillRect(bx - 2, roofCy - 1, 4, 3)
+        ctx.fillStyle = '#5a5a5a'
+        ctx.fillRect(bx - 2, roofCy - 1, 4, 1)
+        // hazard stripes (yellow-black)
+        for (let i = 0; i < 2; i++) {
+          ctx.fillStyle = i % 2 === 0 ? '#ffcc00' : '#1a1a1a'
+          ctx.fillRect(bx - 2 + i * 2, roofCy, 2, 1)
+        }
+      }
+      // dual barrels (side by side, heavier)
+      const barrelLen = 13
+      for (const offX of [-3, 3]) {
+        ctx.fillStyle = '#1a1a1a'
+        ctx.fillRect(roofCx + offX - 1.5, roofCy - barrelLen, 3, barrelLen)
+        ctx.fillStyle = '#3a3a3a'
+        ctx.fillRect(roofCx + offX - 0.5, roofCy - barrelLen, 1, barrelLen)
+        // muzzle brake (heavier)
+        ctx.fillStyle = '#0a0a0a'
+        ctx.fillRect(roofCx + offX - 2, roofCy - barrelLen - 2, 4, 3)
+      }
+      // heavy mantlet (wider)
+      ctx.fillStyle = '#1a1a1a'
+      ctx.fillRect(roofCx - 6, roofCy - 5, 12, 5)
+      ctx.fillStyle = '#3a3a3a'
+      ctx.fillRect(roofCx - 5, roofCy - 4, 10, 3)
+      ctx.fillStyle = '#5a5a5a'
+      ctx.fillRect(roofCx - 5, roofCy - 4, 10, 1)
+      // muzzle glow (orange, bigger — one per barrel)
+      for (const offX of [-3, 3]) {
+        const muzG = ctx.createRadialGradient(roofCx + offX, roofCy - barrelLen - 1, 0, roofCx + offX, roofCy - barrelLen - 1, 5)
+        muzG.addColorStop(0, '#ffffff')
+        muzG.addColorStop(0.3, tierAccent)
+        muzG.addColorStop(1, `rgba(${tierAccentRgb},0)`)
+        ctx.fillStyle = muzG
+        ctx.fillRect(roofCx + offX - 5, roofCy - barrelLen - 6, 10, 10)
+      }
+      // 2 amber status lights at base
+      for (const offX of [-7, 7]) {
+        ctx.fillStyle = '#ffaa30'
+        ctx.beginPath(); ctx.arc(roofCx + offX, roofCy + 2, 0.8, 0, Math.PI * 2); ctx.fill()
+      }
+    }
+    else {
+      // --- L3: LASER — energy cannon with glowing cyan core, sleek metallic, no barrels (orb/lens emitter) ---
+      // Sleek angular base pad (darker, sleeker)
+      diamondPath(ctx, roofCx, roofCy, dw * 0.78, dh * 0.78)
+      ctx.fillStyle = '#0a0a0a'; ctx.fill()
+      // Sleek metallic ring (elliptical, like a lens housing)
+      ctx.fillStyle = '#3a3a3a'
+      ctx.beginPath(); ctx.ellipse(roofCx, roofCy, dw * 0.55, dh * 0.55, 0, 0, Math.PI * 2); ctx.fill()
+      ctx.fillStyle = '#5a5a5a'
+      ctx.beginPath(); ctx.ellipse(roofCx, roofCy, dw * 0.5, dh * 0.5, 0, 0, Math.PI * 2); ctx.fill()
+      // Containment ring (mechanical housing)
+      ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 1.5
+      ctx.beginPath(); ctx.ellipse(roofCx, roofCy, dw * 0.42, dh * 0.42, 0, 0, Math.PI * 2); ctx.stroke()
+      // 4 capacitor nodes at NESW (with cyan glow)
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2
+        const nx = roofCx + Math.cos(a) * dw * 0.42
+        const ny = roofCy + Math.sin(a) * dh * 0.42
+        ctx.fillStyle = '#1a1a1a'
+        ctx.beginPath(); ctx.arc(nx, ny, 1.8, 0, Math.PI * 2); ctx.fill()
+        ctx.fillStyle = '#5a5a5a'
+        ctx.beginPath(); ctx.arc(nx, ny, 1.2, 0, Math.PI * 2); ctx.fill()
+        // cyan glow on each capacitor
+        const capG = ctx.createRadialGradient(nx, ny, 0, nx, ny, 2.5)
+        capG.addColorStop(0, 'rgba(0,208,255,0.9)')
+        capG.addColorStop(1, 'rgba(0,208,255,0)')
+        ctx.fillStyle = capG
+        ctx.fillRect(nx - 2.5, ny - 2.5, 5, 5)
+      }
+      // Outer cyan halo (large soft glow around the orb)
+      const haloG = ctx.createRadialGradient(roofCx, roofCy, 3, roofCx, roofCy, 12)
+      haloG.addColorStop(0, 'rgba(0,208,255,0.45)')
+      haloG.addColorStop(1, 'rgba(0,208,255,0)')
+      ctx.fillStyle = haloG
+      ctx.fillRect(roofCx - 12, roofCy - 12, 24, 24)
+      // Glowing cyan core (orb/lens emitter) — bright white center → cyan → deep cyan
+      const coreG = ctx.createRadialGradient(roofCx, roofCy, 0, roofCx, roofCy, 7)
+      coreG.addColorStop(0, '#ffffff')
+      coreG.addColorStop(0.25, '#a0f0ff')
+      coreG.addColorStop(0.55, '#00d0ff')
+      coreG.addColorStop(1, 'rgba(0,80,120,0)')
+      ctx.fillStyle = coreG
+      ctx.fillRect(roofCx - 7, roofCy - 7, 14, 14)
+      // Inner lens (small bright disc)
+      ctx.fillStyle = '#e0f8ff'
+      ctx.beginPath(); ctx.ellipse(roofCx, roofCy, 2.2, 1.6, 0, 0, Math.PI * 2); ctx.fill()
+      ctx.fillStyle = '#ffffff'
+      ctx.beginPath(); ctx.ellipse(roofCx, roofCy - 0.3, 1.3, 0.9, 0, 0, Math.PI * 2); ctx.fill()
+      // 2 cyan status lights at base (replaces amber)
+      for (const offX of [-7, 7]) {
+        ctx.fillStyle = '#00d0ff'
+        ctx.beginPath(); ctx.arc(roofCx + offX, roofCy + 3, 0.9, 0, Math.PI * 2); ctx.fill()
+      }
     }
   }
 
@@ -1353,8 +1479,135 @@ function renderBuilding(type: BuildingType, faction: Faction, w: number, h: numb
   return c
 }
 
-export function drawBuilding(ctx: CanvasRenderingContext2D, type: BuildingType, faction: Faction, px_: number, py_: number, w = 1, h = 1) {
-  const img = renderBuilding(type, faction, w, h)
+// ---------- Building damage + low-power overlays (drawn at draw-time) ----------
+
+// Damage overlays scaled by HP ratio:
+//   HP < 75% : small cracks on the facade (dark jagged lines)
+//   HP < 50% : more cracks + rising gray smoke particles
+//   HP < 25% : heavy cracks + fire (orange/red flickering dots) + more smoke
+// Cracks use a deterministic seed (from building position) so they don't
+// jitter between frames; smoke/fire are animated by animPhase.
+function drawBuildingDamage(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+  hpRatio: number, animPhase: number, seed: number,
+) {
+  const rng = mulberry(seed | 0)
+
+  // ---- cracks (deterministic) ----
+  const crackStroke = (alpha: number, lw: number, count: number, yMax: number) => {
+    ctx.strokeStyle = `rgba(18,12,8,${alpha})`
+    ctx.lineWidth = lw
+    for (let i = 0; i < count; i++) {
+      const cx = x + 6 + rng() * (w - 12)
+      const cy = y + 4 + rng() * (h * yMax)
+      ctx.beginPath()
+      ctx.moveTo(cx, cy)
+      ctx.lineTo(cx + (rng() - 0.5) * 10, cy + 4 + rng() * 6)
+      ctx.lineTo(cx + (rng() - 0.5) * 8, cy + 8 + rng() * 6)
+      ctx.stroke()
+    }
+  }
+
+  if (hpRatio < 0.75) {
+    crackStroke(0.7, 1, 3, 0.5)
+  }
+  if (hpRatio < 0.5) {
+    crackStroke(0.8, 1, 4, 0.6)
+    // rising gray smoke from the roof area
+    const t = animPhase
+    for (let i = 0; i < 3; i++) {
+      const phase = (t * 0.8 + i * 0.33) % 1
+      const sx = x + w * (0.25 + i * 0.22)
+      const sy = y + 6 - phase * 22
+      const r = 2 + phase * 3
+      const alpha = (1 - phase) * 0.5
+      ctx.fillStyle = `rgba(85,80,75,${alpha})`
+      ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2); ctx.fill()
+    }
+  }
+  if (hpRatio < 0.25) {
+    crackStroke(0.9, 1.5, 5, 0.7)
+    // fire (orange/red flickering dots at the roof)
+    const t = animPhase
+    for (let i = 0; i < 5; i++) {
+      const fx = x + w * (0.18 + i * 0.16) + Math.sin(t * 10 + i * 1.7) * 1.5
+      const fy = y + 5 + Math.sin(t * 14 + i * 2.3) * 1.5
+      const fr = 2 + Math.abs(Math.sin(t * 12 + i)) * 1.5
+      const g = ctx.createRadialGradient(fx, fy, 0, fx, fy, fr + 2)
+      g.addColorStop(0, 'rgba(255,210,90,0.95)')
+      g.addColorStop(0.45, 'rgba(255,110,35,0.7)')
+      g.addColorStop(1, 'rgba(180,30,10,0)')
+      ctx.fillStyle = g
+      ctx.beginPath(); ctx.arc(fx, fy, fr + 2, 0, Math.PI * 2); ctx.fill()
+    }
+    // more + darker smoke
+    for (let i = 0; i < 5; i++) {
+      const phase = (t * 1.0 + i * 0.2) % 1
+      const sx = x + w * (0.15 + i * 0.18)
+      const sy = y + 8 - phase * 26
+      const r = 2.5 + phase * 3.5
+      const alpha = (1 - phase) * 0.6
+      ctx.fillStyle = `rgba(55,50,45,${alpha})`
+      ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2); ctx.fill()
+    }
+  }
+}
+
+// Low-power indicator: building appears dimmer, a red warning light blinks
+// on the roof, and a few small window dots flicker between lit (cyan) and dark.
+function drawLowPowerOverlay(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+  animPhase: number,
+) {
+  // dimmer (flickers slightly — power dipping)
+  const flicker = 0.30 + Math.sin(animPhase * 8) * 0.07 + (Math.floor(animPhase * 3) % 2 === 0 ? 0.05 : 0)
+  ctx.fillStyle = `rgba(0,0,18,${flicker})`
+  ctx.fillRect(x, y, w, h)
+
+  // red warning light blinks on the roof (top-center of the building)
+  const blink = Math.floor(animPhase * 1.5) % 2 === 0
+  if (blink) {
+    const lx = x + w / 2
+    const ly = y + 4
+    const g = ctx.createRadialGradient(lx, ly, 0, lx, ly, 7)
+    g.addColorStop(0, 'rgba(255,80,50,0.95)')
+    g.addColorStop(0.4, 'rgba(220,30,20,0.6)')
+    g.addColorStop(1, 'rgba(180,10,0,0)')
+    ctx.fillStyle = g
+    ctx.beginPath(); ctx.arc(lx, ly, 7, 0, Math.PI * 2); ctx.fill()
+    ctx.fillStyle = '#ff5030'
+    ctx.beginPath(); ctx.arc(lx, ly, 2, 0, Math.PI * 2); ctx.fill()
+  }
+
+  // a few flickering window dots on the facade (suggests windows going dark)
+  for (let i = 0; i < 4; i++) {
+    const wx = x + w * (0.2 + i * 0.2)
+    const wy = y + h * 0.18 + (i % 2) * 5
+    const on = (Math.floor(animPhase * 2) + i) % 3 !== 0
+    if (on) {
+      ctx.fillStyle = 'rgba(0,208,255,0.45)'
+      ctx.fillRect(wx - 1, wy - 2, 2, 3)
+    } else {
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'
+      ctx.fillRect(wx - 1, wy - 2, 2, 3)
+    }
+  }
+}
+
+export function drawBuilding(
+  ctx: CanvasRenderingContext2D,
+  type: BuildingType, faction: Faction,
+  px_: number, py_: number,
+  w = 1, h = 1,
+  // Optional params for damage/power overlays (backward-compatible —
+  // existing callers that omit them still work; page.tsx passes them).
+  hp = 1, maxHp = 1, powered = true, animPhase = 0,
+  // Building level (1-3). Currently only the turret uses this to draw 3 distinct tier sprites.
+  level = 1,
+) {
+  const img = renderBuilding(type, faction, w, h, level)
   // Position the image so:
   //   - the diamond's horizontal CENTER sits at the center of the building's
   //     tile footprint (px_ + w*TILE_SIZE/2),
@@ -1370,6 +1623,19 @@ export function drawBuilding(ctx: CanvasRenderingContext2D, type: BuildingType, 
   const drawX = px_ + (w * TILE_SIZE - img.width) / 2
   const drawY = py_ + h * TILE_SIZE - img.height
   ctx.drawImage(img, drawX, drawY)
+
+  // Low-power overlay (dimmer + red blink light + window flicker)
+  if (!powered) {
+    drawLowPowerOverlay(ctx, drawX, drawY, img.width, img.height, animPhase)
+  }
+
+  // Damage overlays (cracks / smoke / fire based on HP ratio)
+  const hpRatio = maxHp > 0 ? hp / maxHp : 1
+  if (hpRatio < 0.75) {
+    // deterministic seed from building pixel position so cracks are stable
+    const seed = (Math.floor(px_) * 73856093) ^ (Math.floor(py_) * 19349663)
+    drawBuildingDamage(ctx, drawX, drawY, img.width, img.height, hpRatio, animPhase, seed)
+  }
 }
 
 // ---------- Unit rendering (detailed, with bob animation) ----------
@@ -1401,7 +1667,7 @@ function renderUnit(type: UnitType, faction: Faction): HTMLCanvasElement {
     for (let i = 0; i < 6; i++) px(ctx, 7 + i * 5, s - 10, 3, 3, '#4a4a4a')
     // body
     rrect(ctx, 6, s - 20, 26, 9, 2, col.dark)
-    rrect(ctx, 6, s - 20, 26, 2, col.primary)
+    rrect(ctx, 6, s - 20, 26, 2, 1, col.primary)
     px(ctx, 7, s - 19, 24, 1, col.light)
     // cabin
     rrect(ctx, 18, s - 26, 12, 7, 1, col.primary)
@@ -1449,7 +1715,7 @@ function renderUnit(type: UnitType, faction: Faction): HTMLCanvasElement {
     for (let i = 0; i < 6; i++) px(ctx, 5 + i * 5, s - 11, 3, 4, '#4a4a4a')
     // body
     rrect(ctx, 5, s - 22, 28, 10, 2, col.dark)
-    rrect(ctx, 5, s - 22, 28, 2, col.primary)
+    rrect(ctx, 5, s - 22, 28, 2, 1, col.primary)
     px(ctx, 6, s - 21, 26, 1, col.light)
     // turret
     rrect(ctx, cx - 6, s - 30, 14, 9, 2, col.primary)
@@ -1471,42 +1737,743 @@ function renderUnit(type: UnitType, faction: Faction): HTMLCanvasElement {
   return c
 }
 
-// Pre-render a vehicle sprite rotated to one of 8 cardinal/intercardinal
+// ============================================================
+//  8-DIRECTIONAL VEHICLE SPRITES (unique per direction, no rotation)
+// ============================================================
+//  Each direction draws a visually distinct sprite instead of rotating
+//  one base image. This fixes the "tank looks sideways when going up /
+//  upside-down when going left" problem.
+//
+//    dir 0 (E)  — full SIDE profile, facing right (cannon/scoop on right)
+//    dir 4 (W)  — MIRROR of East (side profile facing left)
+//    dir 2 (S)  — FRONT view (headlights, turret front toward viewer)
+//    dir 6 (N)  — REAR view (exhaust pipes, engine deck)
+//    dir 1,3,5,7 (diagonals) — side view (E or W) with turret shifted
+//                              vertically for a 3/4 foreshortening feel
+//
+//  Soldiers do NOT rotate — they always face the player. Instead they get
+//  a 2-frame walking leg animation (see drawSoldierAnim).
+//
+//  Convention: dir = Math.round(angle / (PI/4)) % 8, clockwise from East
+//  in canvas coords because +Y is down.
+
+type FactionColorSet = typeof FACTION_COLORS.atreides
+
+function drawShadow(ctx: CanvasRenderingContext2D, cx: number, y: number, rx: number, ry: number) {
+  ctx.fillStyle = 'rgba(0,0,0,0.4)'
+  ctx.beginPath(); ctx.ellipse(cx, y, rx, ry, 0, 0, Math.PI * 2); ctx.fill()
+}
+
+// ---------- TANK ----------
+
+// Side profile (East-facing). turretDy shifts the turret vertically —
+// used by diagonals to suggest 3/4 foreshortening
+// (+1 = turret lower for SE/SW, -1 = turret higher for NE/NW).
+function drawTankSide(ctx: CanvasRenderingContext2D, col: FactionColorSet, s: number, turretDy = 0) {
+  const cx = s / 2
+  // tracks
+  rrect(ctx, 4, s - 12, 30, 6, 2, '#2a2a2a')
+  for (let i = 0; i < 6; i++) px(ctx, 5 + i * 5, s - 11, 3, 4, '#4a4a4a')
+  // body
+  rrect(ctx, 5, s - 22, 28, 10, 2, col.dark)
+  rrect(ctx, 5, s - 22, 28, 2, 1, col.primary)
+  px(ctx, 6, s - 21, 26, 1, col.light)
+  // turret (with optional diagonal shift)
+  rrect(ctx, cx - 6, s - 30 + turretDy, 14, 9, 2, col.primary)
+  px(ctx, cx - 6, s - 30 + turretDy, 14, 1, col.light)
+  px(ctx, cx - 6, s - 22 + turretDy, 14, 1, col.dark)
+  // cannon (points right)
+  px(ctx, cx + 6, s - 27 + turretDy, 10, 2, '#2a2a2a')
+  px(ctx, cx + 15, s - 28 + turretDy, 2, 1, '#1a1a1a')
+  // muzzle brake
+  px(ctx, cx + 14, s - 28 + turretDy, 3, 4, '#3a3a3a')
+  // hatch
+  rrect(ctx, cx - 2, s - 29 + turretDy, 4, 2, 1, col.flag)
+  // side details
+  px(ctx, 7, s - 14, 3, 2, col.trim)
+  px(ctx, s - 10, s - 14, 3, 2, col.trim)
+}
+
+// Front view (South, dir 2) — facing the viewer. Shorter/wider, see
+// front armor plate, turret front with cannon pointing toward viewer,
+// two headlight glows.
+function drawTankFront(ctx: CanvasRenderingContext2D, col: FactionColorSet, s: number) {
+  const cx = s / 2
+  // 2 tracks (left & right)
+  rrect(ctx, 4, s - 14, 8, 8, 2, '#2a2a2a')
+  rrect(ctx, s - 12, s - 14, 8, 8, 2, '#2a2a2a')
+  for (let i = 0; i < 2; i++) {
+    px(ctx, 5 + i * 3, s - 13, 2, 6, '#4a4a4a')
+    px(ctx, s - 11 + i * 3, s - 13, 2, 6, '#4a4a4a')
+  }
+  // hull — wider, shorter
+  rrect(ctx, 6, s - 18, s - 12, 10, 2, col.dark)
+  rrect(ctx, 6, s - 18, s - 12, 2, 1, col.primary)
+  px(ctx, 7, s - 17, s - 14, 1, col.light)
+  // sloped front armor plate (trapezoid)
+  ctx.fillStyle = col.dark
+  ctx.beginPath()
+  ctx.moveTo(8, s - 10); ctx.lineTo(s - 8, s - 10)
+  ctx.lineTo(s - 10, s - 6); ctx.lineTo(10, s - 6)
+  ctx.closePath(); ctx.fill()
+  // 2 headlights (glowing)
+  for (const hx of [cx - 6, cx + 6]) {
+    const g = ctx.createRadialGradient(hx, s - 8, 0, hx, s - 8, 3.5)
+    g.addColorStop(0, 'rgba(255,248,200,0.95)')
+    g.addColorStop(1, 'rgba(255,248,200,0)')
+    ctx.fillStyle = g
+    ctx.beginPath(); ctx.arc(hx, s - 8, 3.5, 0, Math.PI * 2); ctx.fill()
+    px(ctx, hx - 1, s - 9, 2, 2, '#fff8c0')
+  }
+  // turret (front view — box facing viewer)
+  rrect(ctx, cx - 7, s - 28, 14, 10, 2, col.primary)
+  px(ctx, cx - 7, s - 28, 14, 1, col.light)
+  px(ctx, cx - 7, s - 19, 14, 1, col.dark)
+  // cannon mantlet (circle facing viewer — cannon points AT viewer)
+  ctx.fillStyle = '#1a1a1a'
+  ctx.beginPath(); ctx.arc(cx, s - 22, 3, 0, Math.PI * 2); ctx.fill()
+  ctx.fillStyle = '#3a3a3a'
+  ctx.beginPath(); ctx.arc(cx, s - 22, 1.5, 0, Math.PI * 2); ctx.fill()
+  // hatch
+  rrect(ctx, cx - 2, s - 28, 4, 2, 1, col.flag)
+}
+
+// Rear view (North, dir 6) — engine deck + exhaust pipes visible.
+function drawTankRear(ctx: CanvasRenderingContext2D, col: FactionColorSet, s: number) {
+  const cx = s / 2
+  // 2 tracks
+  rrect(ctx, 4, s - 14, 8, 8, 2, '#2a2a2a')
+  rrect(ctx, s - 12, s - 14, 8, 8, 2, '#2a2a2a')
+  for (let i = 0; i < 2; i++) {
+    px(ctx, 5 + i * 3, s - 13, 2, 6, '#4a4a4a')
+    px(ctx, s - 11 + i * 3, s - 13, 2, 6, '#4a4a4a')
+  }
+  // hull
+  rrect(ctx, 6, s - 18, s - 12, 10, 2, col.dark)
+  rrect(ctx, 6, s - 18, s - 12, 2, 1, col.primary)
+  px(ctx, 7, s - 17, s - 14, 1, col.light)
+  // engine deck (darker plate)
+  rrect(ctx, 8, s - 16, s - 16, 4, 1, '#1a1a1a')
+  px(ctx, 9, s - 16, s - 18, 1, '#3a3a3a')
+  // 2 exhaust pipes with heat glow
+  for (const ex of [10, s - 10]) {
+    px(ctx, ex - 1, s - 20, 3, 5, '#2a2a2a')
+    const g = ctx.createRadialGradient(ex, s - 21, 0, ex, s - 21, 2.5)
+    g.addColorStop(0, 'rgba(255,120,40,0.8)')
+    g.addColorStop(1, 'rgba(255,120,40,0)')
+    ctx.fillStyle = g
+    ctx.beginPath(); ctx.arc(ex, s - 21, 2.5, 0, Math.PI * 2); ctx.fill()
+  }
+  // turret (rear view — box)
+  rrect(ctx, cx - 7, s - 28, 14, 10, 2, col.primary)
+  px(ctx, cx - 7, s - 28, 14, 1, col.light)
+  px(ctx, cx - 7, s - 19, 14, 1, col.dark)
+  // turret rear vent
+  rrect(ctx, cx - 4, s - 24, 8, 3, 1, col.dark)
+  px(ctx, cx - 4, s - 24, 8, 1, '#1a1a1a')
+  // hatch
+  rrect(ctx, cx - 2, s - 28, 4, 2, 1, col.flag)
+}
+
+function drawTankDir(ctx: CanvasRenderingContext2D, col: FactionColorSet, dir: number) {
+  const s = TILE_SIZE
+  const cx = s / 2
+  drawShadow(ctx, cx, s - 6, 9, 3.5)
+  if (dir === 0) {
+    drawTankSide(ctx, col, s, 0)
+  } else if (dir === 4) {
+    // West = mirror of East
+    ctx.save(); ctx.translate(s, 0); ctx.scale(-1, 1)
+    drawTankSide(ctx, col, s, 0)
+    ctx.restore()
+  } else if (dir === 2) {
+    drawTankFront(ctx, col, s)
+  } else if (dir === 6) {
+    drawTankRear(ctx, col, s)
+  } else {
+    // diagonals: SE(1)/NE(7) use East base; SW(3)/NW(5) use West base.
+    // SE(1)/SW(3): viewer sees from above → turret shifts down (+1).
+    // NE(7)/NW(5): viewer sees from below → turret shifts up (-1).
+    const isWest = dir === 3 || dir === 5
+    const turretDy = (dir === 1 || dir === 3) ? 1 : -1
+    ctx.save()
+    if (isWest) { ctx.translate(s, 0); ctx.scale(-1, 1) }
+    drawTankSide(ctx, col, s, turretDy)
+    ctx.restore()
+  }
+}
+
+// ---------- HARVESTER (sci-fi redesign — hover pads, angular hull, spice container) ----------
+
+// Side profile (East-facing). Collector arm on the RIGHT end (front),
+// exhaust vents on the LEFT (rear). cabinDy shifts the cabin vertically
+// for diagonals (cabin is at the rear, behind the operator station).
+function drawHarvesterSide(ctx: CanvasRenderingContext2D, col: FactionColorSet, s: number, cabinDy = 0) {
+  // ===== HOVER PADS (anti-grav skids — no tracks/wheels) =====
+  // 2 rounded triangular skids with cyan underglow.
+  for (const padX of [8, 26]) {
+    // cyan underglow (radial gradient below the pad)
+    const glowG = ctx.createRadialGradient(padX + 4, s - 2, 0, padX + 4, s - 2, 7)
+    glowG.addColorStop(0, 'rgba(0,208,255,0.55)')
+    glowG.addColorStop(1, 'rgba(0,208,255,0)')
+    ctx.fillStyle = glowG
+    ctx.fillRect(padX - 2, s - 6, 14, 7)
+    // pad (rounded trapezoid — sleek, not boxy)
+    ctx.fillStyle = '#1f1f1f'
+    ctx.beginPath()
+    ctx.moveTo(padX, s - 5)
+    ctx.lineTo(padX + 8, s - 5)
+    ctx.lineTo(padX + 7, s - 8)
+    ctx.lineTo(padX + 1, s - 8)
+    ctx.closePath(); ctx.fill()
+    // top edge highlight (sleek metal)
+    ctx.fillStyle = '#5a5a5a'
+    ctx.fillRect(padX + 1, s - 8, 6, 1)
+    // central intake slit (cyan glow line)
+    ctx.fillStyle = '#00d0ff'
+    ctx.fillRect(padX + 3, s - 4, 2, 1)
+  }
+
+  // ===== BODY — sleek angular hull with chamfered edges =====
+  ctx.fillStyle = col.dark
+  ctx.beginPath()
+  ctx.moveTo(5, s - 9)            // bottom-left
+  ctx.lineTo(5, s - 20)           // top-left (rear-top corner)
+  ctx.lineTo(10, s - 22)          // chamfered top-left
+  ctx.lineTo(26, s - 22)          // top edge (under spice container)
+  ctx.lineTo(32, s - 19)          // chamfered top-right (front slopes down)
+  ctx.lineTo(32, s - 9)           // bottom-right (front-bottom corner)
+  ctx.closePath(); ctx.fill()
+  // faction-tinted top highlight strip
+  ctx.fillStyle = col.primary
+  ctx.fillRect(6, s - 21, 24, 1)
+  ctx.fillStyle = col.light
+  ctx.fillRect(6, s - 21, 24, 1)
+  // lower-body depth shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.4)'
+  ctx.fillRect(5, s - 11, 27, 2)
+
+  // ===== ENERGY CONDUITS — glowing faction-colored lines along the body =====
+  ctx.globalAlpha = 0.55
+  ctx.strokeStyle = col.trim
+  ctx.lineWidth = 2
+  ctx.beginPath(); ctx.moveTo(7, s - 14); ctx.lineTo(30, s - 14); ctx.stroke()
+  ctx.globalAlpha = 1
+  ctx.strokeStyle = col.light
+  ctx.lineWidth = 1
+  ctx.beginPath(); ctx.moveTo(7, s - 14); ctx.lineTo(30, s - 14); ctx.stroke()
+  // 3 conduit junction nodes (small glowing dots)
+  for (const jx of [10, 18, 27]) {
+    ctx.fillStyle = col.flag
+    ctx.beginPath(); ctx.arc(jx, s - 14, 0.9, 0, Math.PI * 2); ctx.fill()
+  }
+
+  // ===== TRANSPARENT SPICE CONTAINER (on top, orange spice visible inside) =====
+  // Glass container with chamfered corners (trapezoid for side view).
+  ctx.fillStyle = 'rgba(60,40,20,0.5)'   // dark glass tint
+  ctx.beginPath()
+  ctx.moveTo(12, s - 22)
+  ctx.lineTo(26, s - 22)
+  ctx.lineTo(28, s - 29)
+  ctx.lineTo(14, s - 29)
+  ctx.closePath(); ctx.fill()
+  // spice mass (orange, fills most of the container)
+  ctx.fillStyle = 'rgba(232,93,47,0.85)'
+  ctx.beginPath()
+  ctx.moveTo(13, s - 23)
+  ctx.lineTo(26, s - 23)
+  ctx.lineTo(27, s - 28)
+  ctx.lineTo(15, s - 28)
+  ctx.closePath(); ctx.fill()
+  // spice surface highlight
+  ctx.fillStyle = 'rgba(255,150,80,0.7)'
+  ctx.fillRect(15, s - 27, 11, 1)
+  // spice crystal chunks (bright specks inside)
+  ctx.fillStyle = '#ffb070'
+  ctx.fillRect(17, s - 25, 1, 1)
+  ctx.fillRect(22, s - 24, 1, 1)
+  ctx.fillRect(20, s - 26, 1, 1)
+  // glass top edge highlight (shiny)
+  ctx.strokeStyle = 'rgba(255,255,255,0.45)'
+  ctx.lineWidth = 1
+  ctx.beginPath(); ctx.moveTo(14, s - 29); ctx.lineTo(28, s - 29); ctx.stroke()
+
+  // ===== CABIN — small cockpit at the REAR (operator station) =====
+  rrect(ctx, 6, s - 26 + cabinDy, 8, 6, 1, col.primary)
+  px(ctx, 6, s - 26 + cabinDy, 8, 1, col.light)
+  // window (cyan-tinted, sleek)
+  rrect(ctx, 7, s - 25 + cabinDy, 6, 3, 1, '#7ac0ff')
+  px(ctx, 7, s - 25 + cabinDy, 6, 1, '#a8d8ff')
+
+  // ===== GLOWING INTAKE VENT (on the FRONT face of the body) =====
+  // Vertical slot with orange spice-processing glow.
+  const intakeX = 31, intakeY = s - 15
+  const intakeG = ctx.createRadialGradient(intakeX, intakeY, 0, intakeX, intakeY, 5)
+  intakeG.addColorStop(0, 'rgba(255,160,60,0.9)')
+  intakeG.addColorStop(0.5, 'rgba(255,128,48,0.5)')
+  intakeG.addColorStop(1, 'rgba(255,128,48,0)')
+  ctx.fillStyle = intakeG
+  ctx.fillRect(intakeX - 5, intakeY - 5, 10, 10)
+  // dark slot
+  ctx.fillStyle = '#1a1a1a'
+  ctx.fillRect(intakeX - 1, intakeY - 3, 2, 6)
+  // bright core
+  ctx.fillStyle = '#ffd060'
+  ctx.fillRect(intakeX - 0.5, intakeY - 2, 1, 4)
+
+  // ===== COLLECTOR ARM — articulated mechanical arm with glow tip =====
+  // Upper segment from body, angled outward to a joint.
+  ctx.strokeStyle = '#5a5a5a'; ctx.lineWidth = 2
+  ctx.beginPath(); ctx.moveTo(30, s - 17); ctx.lineTo(35, s - 13); ctx.stroke()
+  // joint (pivot disc)
+  ctx.fillStyle = '#1f1f1f'
+  ctx.beginPath(); ctx.arc(35, s - 13, 1.8, 0, Math.PI * 2); ctx.fill()
+  ctx.fillStyle = '#5a5a5a'
+  ctx.beginPath(); ctx.arc(35, s - 13, 1.1, 0, Math.PI * 2); ctx.fill()
+  // lower segment (extends down to the sand)
+  ctx.strokeStyle = '#4a4a4a'; ctx.lineWidth = 2
+  ctx.beginPath(); ctx.moveTo(35, s - 13); ctx.lineTo(36, s - 7); ctx.stroke()
+  // collector head (small box at the tip)
+  ctx.fillStyle = '#1f1f1f'
+  ctx.fillRect(34, s - 9, 4, 3)
+  ctx.fillStyle = '#5a5a5a'
+  ctx.fillRect(34, s - 9, 4, 1)
+  // glow tip (bright spice intake beam)
+  const tipG = ctx.createRadialGradient(36, s - 6, 0, 36, s - 6, 3.5)
+  tipG.addColorStop(0, 'rgba(255,200,80,0.95)')
+  tipG.addColorStop(0.5, 'rgba(255,128,48,0.6)')
+  tipG.addColorStop(1, 'rgba(255,128,48,0)')
+  ctx.fillStyle = tipG
+  ctx.fillRect(33, s - 9, 7, 7)
+  ctx.fillStyle = '#ffe080'
+  ctx.beginPath(); ctx.arc(36, s - 6, 0.9, 0, Math.PI * 2); ctx.fill()
+
+  // ===== EXHAUST VENTS (on the REAR, LEFT side) with heat shimmer =====
+  // 2 small vents on the rear face.
+  ctx.fillStyle = '#1a1a1a'
+  ctx.fillRect(4, s - 18, 2, 2)
+  ctx.fillRect(4, s - 15, 2, 2)
+  // heat shimmer (fading horizontal lines extending LEFT from the vents)
+  for (const vy of [s - 17, s - 14]) {
+    const shimG = ctx.createLinearGradient(2, vy, 2 - 5, vy)
+    shimG.addColorStop(0, 'rgba(255,180,80,0.65)')
+    shimG.addColorStop(1, 'rgba(255,180,80,0)')
+    ctx.fillStyle = shimG
+    ctx.fillRect(2 - 5, vy - 0.5, 5, 1)
+  }
+}
+
+// Front view (South, dir 2) — intake vent + collector head facing the viewer.
+function drawHarvesterFront(ctx: CanvasRenderingContext2D, col: FactionColorSet, s: number) {
+  const cx = s / 2
+
+  // ===== HOVER PADS (2 skids, left & right, with underglow) =====
+  for (const padX of [6, s - 14]) {
+    const glowG = ctx.createRadialGradient(padX + 4, s - 2, 0, padX + 4, s - 2, 7)
+    glowG.addColorStop(0, 'rgba(0,208,255,0.55)')
+    glowG.addColorStop(1, 'rgba(0,208,255,0)')
+    ctx.fillStyle = glowG
+    ctx.fillRect(padX - 2, s - 6, 14, 7)
+    ctx.fillStyle = '#1f1f1f'
+    ctx.beginPath()
+    ctx.moveTo(padX, s - 5)
+    ctx.lineTo(padX + 8, s - 5)
+    ctx.lineTo(padX + 7, s - 8)
+    ctx.lineTo(padX + 1, s - 8)
+    ctx.closePath(); ctx.fill()
+    ctx.fillStyle = '#5a5a5a'
+    ctx.fillRect(padX + 1, s - 8, 6, 1)
+    ctx.fillStyle = '#00d0ff'
+    ctx.fillRect(padX + 3, s - 4, 2, 1)
+  }
+
+  // ===== HULL — wide angular front face =====
+  ctx.fillStyle = col.dark
+  ctx.beginPath()
+  ctx.moveTo(6, s - 9)            // bottom-left
+  ctx.lineTo(6, s - 18)           // left side up
+  ctx.lineTo(10, s - 22)          // chamfered top-left
+  ctx.lineTo(s - 10, s - 22)      // top edge
+  ctx.lineTo(s - 6, s - 18)       // chamfered top-right
+  ctx.lineTo(s - 6, s - 9)        // bottom-right
+  ctx.closePath(); ctx.fill()
+  // faction top highlight
+  ctx.fillStyle = col.primary
+  ctx.fillRect(7, s - 21, s - 14, 1)
+  ctx.fillStyle = col.light
+  ctx.fillRect(7, s - 21, s - 14, 1)
+  // lower depth shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.4)'
+  ctx.fillRect(6, s - 11, s - 12, 2)
+
+  // ===== ENERGY CONDUITS — horizontal glowing line across the hull =====
+  ctx.globalAlpha = 0.55
+  ctx.strokeStyle = col.trim
+  ctx.lineWidth = 2
+  ctx.beginPath(); ctx.moveTo(8, s - 14); ctx.lineTo(s - 8, s - 14); ctx.stroke()
+  ctx.globalAlpha = 1
+  ctx.strokeStyle = col.light
+  ctx.lineWidth = 1
+  ctx.beginPath(); ctx.moveTo(8, s - 14); ctx.lineTo(s - 8, s - 14); ctx.stroke()
+  // central conduit junction (faction-colored node)
+  ctx.fillStyle = col.flag
+  ctx.beginPath(); ctx.arc(cx, s - 14, 1.2, 0, Math.PI * 2); ctx.fill()
+
+  // ===== TRANSPARENT SPICE CONTAINER (centered, visible from front) =====
+  ctx.fillStyle = 'rgba(60,40,20,0.5)'
+  ctx.beginPath()
+  ctx.moveTo(cx - 7, s - 22)
+  ctx.lineTo(cx + 7, s - 22)
+  ctx.lineTo(cx + 8, s - 29)
+  ctx.lineTo(cx - 8, s - 29)
+  ctx.closePath(); ctx.fill()
+  // spice mass
+  ctx.fillStyle = 'rgba(232,93,47,0.85)'
+  ctx.beginPath()
+  ctx.moveTo(cx - 6, s - 23)
+  ctx.lineTo(cx + 6, s - 23)
+  ctx.lineTo(cx + 7, s - 28)
+  ctx.lineTo(cx - 7, s - 28)
+  ctx.closePath(); ctx.fill()
+  // spice highlight + chunks
+  ctx.fillStyle = 'rgba(255,150,80,0.7)'
+  ctx.fillRect(cx - 6, s - 27, 12, 1)
+  ctx.fillStyle = '#ffb070'
+  ctx.fillRect(cx - 3, s - 25, 1, 1)
+  ctx.fillRect(cx + 2, s - 24, 1, 1)
+  // glass top edge highlight
+  ctx.strokeStyle = 'rgba(255,255,255,0.45)'
+  ctx.lineWidth = 1
+  ctx.beginPath(); ctx.moveTo(cx - 8, s - 29); ctx.lineTo(cx + 8, s - 29); ctx.stroke()
+
+  // ===== GLOWING INTAKE VENT (centered, big — facing the viewer) =====
+  const intakeX = cx, intakeY = s - 16
+  const intakeG = ctx.createRadialGradient(intakeX, intakeY, 0, intakeX, intakeY, 7)
+  intakeG.addColorStop(0, 'rgba(255,180,80,0.95)')
+  intakeG.addColorStop(0.5, 'rgba(255,128,48,0.55)')
+  intakeG.addColorStop(1, 'rgba(255,128,48,0)')
+  ctx.fillStyle = intakeG
+  ctx.fillRect(intakeX - 7, intakeY - 7, 14, 14)
+  // dark vent slot (horizontal)
+  ctx.fillStyle = '#1a1a1a'
+  ctx.fillRect(intakeX - 4, intakeY - 2, 8, 3)
+  // bright core slats
+  ctx.fillStyle = '#ffd060'
+  ctx.fillRect(intakeX - 3, intakeY - 1, 6, 1)
+  ctx.fillStyle = '#ffe080'
+  ctx.fillRect(intakeX - 3, intakeY + 0.5, 6, 0.5)
+
+  // ===== COLLECTOR ARM (centered, extending down toward viewer) =====
+  // Just the tip + glow visible from the front (the arm goes "into" the screen).
+  // collector head (small box, centered low)
+  ctx.fillStyle = '#1f1f1f'
+  ctx.fillRect(cx - 3, s - 8, 6, 3)
+  ctx.fillStyle = '#5a5a5a'
+  ctx.fillRect(cx - 3, s - 8, 6, 1)
+  // glow tip (bright orange — spice intake beam toward viewer)
+  const tipG = ctx.createRadialGradient(cx, s - 6, 0, cx, s - 6, 4)
+  tipG.addColorStop(0, 'rgba(255,220,100,0.95)')
+  tipG.addColorStop(0.5, 'rgba(255,128,48,0.6)')
+  tipG.addColorStop(1, 'rgba(255,128,48,0)')
+  ctx.fillStyle = tipG
+  ctx.fillRect(cx - 4, s - 9, 8, 8)
+  ctx.fillStyle = '#ffe080'
+  ctx.beginPath(); ctx.arc(cx, s - 6, 1.1, 0, Math.PI * 2); ctx.fill()
+
+  // ===== CABIN (centered, behind the intake — peek above) =====
+  // small cockpit dome above the spice container
+  rrect(ctx, cx - 3, s - 31, 6, 3, 1, col.primary)
+  px(ctx, cx - 3, s - 31, 6, 1, col.light)
+  // window slit
+  ctx.fillStyle = '#7ac0ff'
+  ctx.fillRect(cx - 2, s - 30, 4, 1)
+}
+
+// Rear view (North, dir 6) — exhaust vents with strong heat shimmer + dumping chute.
+function drawHarvesterRear(ctx: CanvasRenderingContext2D, col: FactionColorSet, s: number) {
+  const cx = s / 2
+
+  // ===== HOVER PADS (2 skids, left & right) =====
+  for (const padX of [6, s - 14]) {
+    const glowG = ctx.createRadialGradient(padX + 4, s - 2, 0, padX + 4, s - 2, 7)
+    glowG.addColorStop(0, 'rgba(0,208,255,0.55)')
+    glowG.addColorStop(1, 'rgba(0,208,255,0)')
+    ctx.fillStyle = glowG
+    ctx.fillRect(padX - 2, s - 6, 14, 7)
+    ctx.fillStyle = '#1f1f1f'
+    ctx.beginPath()
+    ctx.moveTo(padX, s - 5)
+    ctx.lineTo(padX + 8, s - 5)
+    ctx.lineTo(padX + 7, s - 8)
+    ctx.lineTo(padX + 1, s - 8)
+    ctx.closePath(); ctx.fill()
+    ctx.fillStyle = '#5a5a5a'
+    ctx.fillRect(padX + 1, s - 8, 6, 1)
+    ctx.fillStyle = '#00d0ff'
+    ctx.fillRect(padX + 3, s - 4, 2, 1)
+  }
+
+  // ===== HULL — wide rear face =====
+  ctx.fillStyle = col.dark
+  ctx.beginPath()
+  ctx.moveTo(6, s - 9)
+  ctx.lineTo(6, s - 18)
+  ctx.lineTo(10, s - 22)
+  ctx.lineTo(s - 10, s - 22)
+  ctx.lineTo(s - 6, s - 18)
+  ctx.lineTo(s - 6, s - 9)
+  ctx.closePath(); ctx.fill()
+  ctx.fillStyle = col.primary
+  ctx.fillRect(7, s - 21, s - 14, 1)
+  ctx.fillStyle = col.light
+  ctx.fillRect(7, s - 21, s - 14, 1)
+  ctx.fillStyle = 'rgba(0,0,0,0.4)'
+  ctx.fillRect(6, s - 11, s - 12, 2)
+
+  // ===== ENERGY CONDUITS =====
+  ctx.globalAlpha = 0.55
+  ctx.strokeStyle = col.trim
+  ctx.lineWidth = 2
+  ctx.beginPath(); ctx.moveTo(8, s - 14); ctx.lineTo(s - 8, s - 14); ctx.stroke()
+  ctx.globalAlpha = 1
+  ctx.strokeStyle = col.light
+  ctx.lineWidth = 1
+  ctx.beginPath(); ctx.moveTo(8, s - 14); ctx.lineTo(s - 8, s - 14); ctx.stroke()
+  // junction nodes (mirrored)
+  for (const jx of [12, s - 12]) {
+    ctx.fillStyle = col.flag
+    ctx.beginPath(); ctx.arc(jx, s - 14, 0.9, 0, Math.PI * 2); ctx.fill()
+  }
+
+  // ===== TRANSPARENT SPICE CONTAINER (centered, visible from rear) =====
+  ctx.fillStyle = 'rgba(60,40,20,0.5)'
+  ctx.beginPath()
+  ctx.moveTo(cx - 7, s - 22)
+  ctx.lineTo(cx + 7, s - 22)
+  ctx.lineTo(cx + 8, s - 29)
+  ctx.lineTo(cx - 8, s - 29)
+  ctx.closePath(); ctx.fill()
+  ctx.fillStyle = 'rgba(232,93,47,0.85)'
+  ctx.beginPath()
+  ctx.moveTo(cx - 6, s - 23)
+  ctx.lineTo(cx + 6, s - 23)
+  ctx.lineTo(cx + 7, s - 28)
+  ctx.lineTo(cx - 7, s - 28)
+  ctx.closePath(); ctx.fill()
+  ctx.fillStyle = 'rgba(255,150,80,0.7)'
+  ctx.fillRect(cx - 6, s - 27, 12, 1)
+  ctx.fillStyle = '#ffb070'
+  ctx.fillRect(cx - 3, s - 25, 1, 1)
+  ctx.fillRect(cx + 2, s - 24, 1, 1)
+  ctx.strokeStyle = 'rgba(255,255,255,0.45)'
+  ctx.lineWidth = 1
+  ctx.beginPath(); ctx.moveTo(cx - 8, s - 29); ctx.lineTo(cx + 8, s - 29); ctx.stroke()
+
+  // ===== EXHAUST VENTS (2 large, with strong heat shimmer) =====
+  // Vents on left & right of rear face.
+  for (const ex of [10, s - 10]) {
+    // vent housing
+    ctx.fillStyle = '#1a1a1a'
+    ctx.fillRect(ex - 2, s - 17, 4, 5)
+    ctx.fillStyle = '#3a3a3a'
+    ctx.fillRect(ex - 2, s - 17, 4, 1)
+    // heat glow inside
+    const heatG = ctx.createRadialGradient(ex, s - 14, 0, ex, s - 14, 3)
+    heatG.addColorStop(0, 'rgba(255,140,50,0.85)')
+    heatG.addColorStop(1, 'rgba(255,140,50,0)')
+    ctx.fillStyle = heatG
+    ctx.fillRect(ex - 3, s - 17, 6, 6)
+    // heat shimmer (fading vertical lines rising UP from the vent)
+    for (let i = 0; i < 3; i++) {
+      const shimX = ex - 1 + i
+      const shimYTop = s - 22 - i * 0.5
+      const shimYBot = s - 18
+      const shimG = ctx.createLinearGradient(shimX, shimYBot, shimX, shimYTop)
+      shimG.addColorStop(0, 'rgba(255,180,80,0.6)')
+      shimG.addColorStop(1, 'rgba(255,180,80,0)')
+      ctx.fillStyle = shimG
+      ctx.fillRect(shimX, shimYTop, 1, shimYBot - shimYTop)
+    }
+  }
+
+  // ===== DUMPING CHUTE (centered, rear — for unloading spice) =====
+  ctx.fillStyle = '#1f1f1f'
+  ctx.fillRect(cx - 4, s - 11, 8, 3)
+  ctx.fillStyle = '#3a3a3a'
+  ctx.fillRect(cx - 4, s - 11, 8, 1)
+  // chute slit (dark opening)
+  ctx.fillStyle = '#0a0a0a'
+  ctx.fillRect(cx - 3, s - 10, 6, 1)
+  // spice residue glow (faint orange — leftover spice in the chute)
+  const chuteG = ctx.createRadialGradient(cx, s - 9, 0, cx, s - 9, 3)
+  chuteG.addColorStop(0, 'rgba(255,128,48,0.5)')
+  chuteG.addColorStop(1, 'rgba(255,128,48,0)')
+  ctx.fillStyle = chuteG
+  ctx.fillRect(cx - 3, s - 11, 6, 5)
+
+  // ===== CABIN (rear view — peek above spice container) =====
+  rrect(ctx, cx - 3, s - 31, 6, 3, 1, col.primary)
+  px(ctx, cx - 3, s - 31, 6, 1, col.light)
+  ctx.fillStyle = '#7ac0ff'
+  ctx.fillRect(cx - 2, s - 30, 4, 1)
+}
+
+function drawHarvesterDir(ctx: CanvasRenderingContext2D, col: FactionColorSet, dir: number) {
+  const s = TILE_SIZE
+  const cx = s / 2
+  drawShadow(ctx, cx, s - 5, 10, 3.5)
+  if (dir === 0) {
+    drawHarvesterSide(ctx, col, s, 0)
+  } else if (dir === 4) {
+    ctx.save(); ctx.translate(s, 0); ctx.scale(-1, 1)
+    drawHarvesterSide(ctx, col, s, 0)
+    ctx.restore()
+  } else if (dir === 2) {
+    drawHarvesterFront(ctx, col, s)
+  } else if (dir === 6) {
+    drawHarvesterRear(ctx, col, s)
+  } else {
+    // diagonals
+    const isWest = dir === 3 || dir === 5
+    const dy = (dir === 1 || dir === 3) ? 1 : -1
+    ctx.save()
+    if (isWest) { ctx.translate(s, 0); ctx.scale(-1, 1) }
+    drawHarvesterSide(ctx, col, s, dy)
+    ctx.restore()
+  }
+}
+
+// ---------- SOLDIER (walking animation) ----------
+
+// Soldier does NOT rotate — always faces the player. When moving, legs
+// alternate in a 2-frame cycle (frame 0 = left leg forward, frame 1 = right
+// leg forward). animPhase drives the cycle (≈5 changes/sec when animPhase
+// = tNow = Date.now()/400).
+function drawSoldierAnim(ctx: CanvasRenderingContext2D, col: FactionColorSet, s: number, animPhase: number, moving: boolean) {
+  const cx = s / 2
+  drawShadow(ctx, cx, s - 4, 6, 2.5)
+  // leg animation (≈5 changes/sec when animPhase = tNow = Date.now()/400)
+  const legFrame = moving ? Math.floor(animPhase * 2) % 2 : 0
+  if (legFrame === 0) {
+    // left leg forward (longer/lower), right leg back (shorter)
+    px(ctx, cx - 4, s - 11, 2, 5, col.dark)
+    px(ctx, cx + 2, s - 10, 2, 4, col.dark)
+    px(ctx, cx - 5, s - 6, 3, 1, '#1a1a1a')
+    px(ctx, cx + 1, s - 6, 2, 1, '#1a1a1a')
+  } else {
+    // right leg forward, left leg back
+    px(ctx, cx - 3, s - 10, 2, 4, col.dark)
+    px(ctx, cx + 1, s - 11, 2, 5, col.dark)
+    px(ctx, cx - 3, s - 6, 2, 1, '#1a1a1a')
+    px(ctx, cx + 2, s - 6, 3, 1, '#1a1a1a')
+  }
+  // body
+  rrect(ctx, cx - 3, s - 18, 6, 8, 1, col.primary)
+  px(ctx, cx - 3, s - 18, 6, 1, col.light)
+  px(ctx, cx - 3, s - 13, 6, 1, col.trim)
+  // belt
+  px(ctx, cx - 3, s - 12, 6, 1, col.dark)
+  // head
+  rrect(ctx, cx - 2, s - 22, 4, 4, 1, '#d4a878')
+  px(ctx, cx - 2, s - 22, 4, 1, '#b88860')
+  // helmet
+  rrect(ctx, cx - 3, s - 23, 6, 2, 1, col.dark)
+  px(ctx, cx - 3, s - 23, 6, 1, col.primary)
+  // rifle
+  px(ctx, cx + 3, s - 16, 7, 1, '#2a2a2a')
+  px(ctx, cx + 9, s - 17, 1, 2, '#2a2a2a')
+  px(ctx, cx + 2, s - 15, 1, 2, '#4a4a4a')
+  // backpack
+  px(ctx, cx - 5, s - 17, 2, 4, col.dark)
+}
+
+// ---------- Harvesting dust (drawn at draw-time, not cached) ----------
+
+// When a harvester is harvesting, scatter small brown/tan dust particles
+// around the scoop (front of the harvester, in the facing direction).
+// The scoop position is computed from dir. Particles drift outward and
+// rise slightly, driven by animPhase, for a continuous dust-kicking look.
+function drawHarvestDust(ctx: CanvasRenderingContext2D, px_: number, py_: number, dir: number, animPhase: number) {
+  const ang = dir * Math.PI / 4
+  const sx = px_ + Math.cos(ang) * 14
+  const sy = py_ + Math.sin(ang) * 14
+  // fixed seed so dust base positions are stable; animPhase drives motion
+  const rng = mulberry(2024)
+  for (let i = 0; i < 9; i++) {
+    const baseA = rng() * Math.PI * 2
+    const baseR = 2 + rng() * 5
+    const t = (animPhase * 1.5 + i * 0.33) % 1
+    const r = baseR + t * 7
+    const dx = sx + Math.cos(baseA) * r
+    const dy = sy + Math.sin(baseA) * r * 0.6 - t * 4
+    const sz = 1 + rng() * 1.2 + t * 0.5
+    const alpha = (1 - t) * 0.55 + 0.15
+    ctx.fillStyle = `rgba(214,182,122,${alpha})`
+    ctx.beginPath(); ctx.arc(dx, dy, sz, 0, Math.PI * 2); ctx.fill()
+  }
+  // a few larger, lighter dust puffs
+  for (let i = 0; i < 3; i++) {
+    const a = rng() * Math.PI * 2
+    const r = 4 + rng() * 5 + (animPhase * 2 + i) % 1 * 5
+    ctx.fillStyle = 'rgba(196,164,108,0.3)'
+    ctx.beginPath(); ctx.arc(sx + Math.cos(a) * r, sy + Math.sin(a) * r * 0.6, 2.5 + rng() * 1.5, 0, Math.PI * 2); ctx.fill()
+  }
+}
+
+// ---------- renderUnitDirection (caches unique per-direction sprites) ----------
+
+// Pre-render a vehicle sprite for one of 8 cardinal/intercardinal
 // directions. dir: 0=E, 1=SE, 2=S, 3=SW, 4=W, 5=NW, 6=N, 7=NE (clockwise
-// in canvas coords because +Y is down). The base renderUnit() draws vehicles
-// facing right (East, dir 0); we rotate that sprite around the tile center.
+// in canvas coords because +Y is down). Draws a UNIQUE sprite per
+// direction (side / front / rear / 3-4 view) — NO rotation.
 function renderUnitDirection(type: UnitType, faction: Faction, dir: number): HTMLCanvasElement {
   const key = `${type}_${faction}_${dir}`
   let c = unitDirCache.get(key)
   if (c) return c
-  const base = renderUnit(type, faction) // existing function, draws facing right (East)
   c = document.createElement('canvas')
   c.width = TILE_SIZE; c.height = TILE_SIZE
   const ctx = c.getContext('2d')!
-  ctx.imageSmoothingEnabled = true
-  ctx.translate(TILE_SIZE / 2, TILE_SIZE / 2)
-  ctx.rotate(dir * Math.PI / 4)
-  ctx.drawImage(base, -TILE_SIZE / 2, -TILE_SIZE / 2)
+  const col = FACTION_COLORS[faction]
+  if (type === 'tank') drawTankDir(ctx, col, dir)
+  else if (type === 'harvester') drawHarvesterDir(ctx, col, dir)
+  // soldiers don't use this path (handled directly in drawUnit)
   unitDirCache.set(key, c)
   return c
 }
 
-export function drawUnit(ctx: CanvasRenderingContext2D, type: UnitType, faction: Faction, px_: number, py_: number, bob = 0, facing = 0) {
+export function drawUnit(
+  ctx: CanvasRenderingContext2D,
+  type: UnitType, faction: Faction,
+  px_: number, py_: number,
+  bob = 0, facing = 0,
+  // Optional animation/state params (backward-compatible — existing
+  // callers that omit these still work; page.tsx is updated to pass them).
+  animPhase = 0, state: string = 'idle', _cargo = 0,
+) {
   if (type === 'soldier') {
-    // soldiers don't rotate (they face the player), just draw with bob
-    const img = renderUnit(type, faction)
-    ctx.drawImage(img, px_ - TILE_SIZE / 2, py_ - TILE_SIZE / 2 + bob)
+    // soldiers don't rotate (they face the player). Walking animation
+    // (2-frame leg cycle) plays when moving. Bob is more subtle for soldiers.
+    const soldierBob = bob * 0.5
+    const moving = state === 'move' || state === 'attack' || state === 'return'
+    // draw directly (not cached) so the leg frame can change per-frame
+    ctx.save()
+    ctx.translate(px_ - TILE_SIZE / 2, py_ - TILE_SIZE / 2 + soldierBob)
+    drawSoldierAnim(ctx, FACTION_COLORS[faction], TILE_SIZE, animPhase, moving)
+    ctx.restore()
   } else {
-    // vehicles (harvester, tank) use 8-directional pre-rendered sprites.
+    // vehicles (harvester, tank): 8-directional unique pre-rendered sprites.
     // Normalize facing angle to [0, 2*PI), then snap to nearest 45° step.
     // 0 = East (right), PI/2 = South (canvas down), PI = West, 3PI/2 = North.
-    // dir: 0=E, 1=SE, 2=S, 3=SW, 4=W, 5=NW, 6=N, 7=NE.
     let angle = facing
     while (angle < 0) angle += Math.PI * 2
     while (angle >= Math.PI * 2) angle -= Math.PI * 2
     const dir = Math.round(angle / (Math.PI / 4)) % 8
     const img = renderUnitDirection(type, faction, dir)
     ctx.drawImage(img, px_ - TILE_SIZE / 2, py_ - TILE_SIZE / 2 + bob)
+    // harvester harvesting: dust particles around the scoop
+    if (type === 'harvester' && state === 'harvest') {
+      drawHarvestDust(ctx, px_, py_, dir, animPhase)
+    }
   }
 }
 
@@ -1670,11 +2637,11 @@ export function getTilePreview(tileId: number, size = 40): string {
   return c.toDataURL()
 }
 
-export function getBuildingPreview(type: BuildingType, faction: Faction, size = 40, w = 1, h = 1): string {
+export function getBuildingPreview(type: BuildingType, faction: Faction, size = 40, w = 1, h = 1, level = 1): string {
   const c = document.createElement('canvas')
   c.width = size; c.height = size
   const ctx = c.getContext('2d')!
-  const img = renderBuilding(type, faction, w, h)
+  const img = renderBuilding(type, faction, w, h, level)
   // Dimetric images are roughly square-ish; scale to fit the larger dimension
   // and center the image inside the preview square.
   const scale = size / Math.max(img.width, img.height)
@@ -1697,7 +2664,35 @@ export function getUnitPreview(type: UnitType, faction: Faction, size = 40): str
 }
 
 // ---------- Projectile ----------
-export function drawProjectile(ctx: CanvasRenderingContext2D, x: number, y: number, sx: number, sy: number, color: string) {
+export function drawProjectile(ctx: CanvasRenderingContext2D, x: number, y: number, sx: number, sy: number, color: string, isBeam = false) {
+  if (isBeam) {
+    // ===== LASER BEAM (L3 turret) =====
+    // Draw as a glowing line from source to current projectile pos.
+    // outer wide glow
+    ctx.strokeStyle = color
+    ctx.lineWidth = 6
+    ctx.globalAlpha = 0.18
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(x, y); ctx.stroke()
+    // mid glow
+    ctx.lineWidth = 3
+    ctx.globalAlpha = 0.55
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(x, y); ctx.stroke()
+    // bright white core line
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = 1.5
+    ctx.globalAlpha = 1
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(x, y); ctx.stroke()
+    // head burst at impact point
+    const g = ctx.createRadialGradient(x, y, 0, x, y, 5)
+    g.addColorStop(0, '#ffffff')
+    g.addColorStop(0.45, color)
+    g.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.fillStyle = g
+    ctx.fillRect(x - 5, y - 5, 10, 10)
+    ctx.globalAlpha = 1
+    return
+  }
+  // ===== BULLET / TRACER (L1, L2 turret + unit bullets) =====
   // tracer trail
   const dx = x - sx, dy = y - sy
   const d = Math.hypot(dx, dy) || 1

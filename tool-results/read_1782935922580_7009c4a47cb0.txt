@@ -1,0 +1,254 @@
+     1→     1→# Worklog — Dune RTS Game
+     2→     2→
+     3→     3→## Task 4-renderer: Rewrite multi-tile building renderer
+     4→     4→**Agent:** general-purpose sub-agent
+     5→     5→**File modified:** `src/lib/tile-renderer.ts` (only the building rendering section)
+     6→     6→
+     7→     7→### Summary
+     8→     8→Rewrote `renderBuilding` to support multi-tile building footprints (2x2, 3x2, 1x1) with much richer, Dune-aesthetic artwork. Updated `drawBuilding` and `getBuildingPreview` to thread the `w,h` footprint through to the renderer. Cache is now keyed by `type+faction+w+h`.
+     9→     9→
+    10→    10→### Signature changes
+    11→    11→- `renderBuilding(type, faction)` → `renderBuilding(type, faction, w, h)` (internal, required)
+    12→    12→- `drawBuilding(ctx, type, faction, px_, py_)` → `drawBuilding(ctx, type, faction, px_, py_, w = 1, h = 1)` (defaults preserve backward compatibility with existing callers in `src/app/page.tsx` that don't yet pass footprints)
+    13→    13→- `getBuildingPreview(type, faction, size = 40)` → `getBuildingPreview(type, faction, size = 40, w = 1, h = 1)` (preview canvas remains square; building image is scaled by `size / (max(w,h) * TILE_SIZE)` so multi-tile buildings fit)
+    14→    14→- Cache key: `${type}_${faction}` → `${type}_${faction}_${w}x${h}`
+    15→    15→
+    16→    16→### Building artwork details (all use `px`, `rrect`, `FACTION_COLORS`, `mulberry` RNG; linear/radial gradients throughout)
+    17→    17→- **palace (2x2 / 80x80):** Thick gradient back wall with crenellated battlements, 4 corner towers (front pair taller, back pair recessed) each with conical roof + shadow side + finial + 2 rows of glowing windows, tall central keep with pyramidal roof + ridge highlight + 4 stained-glass windows + faction roundel emblem, large arched double gate with seam/bands/rivets, big central flag with stripe + finial, wall torch glows.
+    18→    18→- **barracks (2x2 / 80x80):** Gradient wall + large triangular pediment roof (lit/shadow split, ridge, eave trim, skylight slit), military faction stripe with chevrons, tall antenna with crossbars + red beacon + flag, central double door with seam/handles, 4 glowing side windows, 2-row sandbag emplacements at corners, supply crates, roof vent pipes.
+    19→    19→- **factory (3x2 / 120x80):** Wide gradient structure, 6-peak sawtooth roof with glass faces + glazing bars + shadow sides + ridge rail, 2 industrial chimneys with bands/lips + 4-puff rising smoke, big roll-up garage door with 5 panels + hazard stripes, glowing control-room window, routed pipes with flanges + 2 valve wheels, multi-pane side windows, hazard line on ground.
+    20→    20→- **turret (1x1 / 40x40):** Refined existing design — octagonal base pad with rivets, hemisphere dome with linear gradient + highlight + rivet ring, cannon mantlet + barrel + muzzle brake, faction emblem.
+    21→    21→- **refinery (2x2 / 80x80):** Lower processing structure with stripe, large central dome tank (cylinder base with rivets + hemisphere top with radial gradient + horizontal band lines + vertical seams + top valve/outlet with faction indicator light), routed side pipes with elbows + highlights, 2 large spoked valve wheels, glowing side windows, central door, spice stain spill with crystal specks.
+    22→    22→- **generator (2x2 / 80x80):** Housing with gradient, vertical radiator cooling fins on both sides (8 slit lines each, top vent glow), horizontal top vent assembly with slats, large glowing radial-gradient power core with containment ring + 8 bolt mounts + bright plasma inner, 4 lightning arcs (top/left/right/bottom) with rounded line caps, energy pylon with ceramic insulators + tip glow, 5 power conduit LEDs along bottom, 2 status display panels.
+    23→    23→
+    24→    24→### Backward compatibility
+    25→    25→- `drawBuilding` and `getBuildingPreview` accept `w,h` with defaults of `1,1`. Existing callers in `src/app/page.tsx` (which still call without `w,h`) continue to work without modification, though buildings will render at 1x1 until page.tsx is updated to pass `b.w, b.h` from the Building footprint (game-engine.ts already exposes `Building.w` / `Building.h`).
+    26→    26→- The `buildingCache` Map uses the new key format; old `${type}_${faction}` entries are simply never matched (and the Map is in-memory only).
+    27→    27→
+    28→    28→### Verification
+    29→    29→- `cd /home/z/my-project && bun run lint` → clean (no eslint output).
+    30→    30→- `bunx tsc --noEmit` shows 2 errors at `tile-renderer.ts:1442` and `:1490` (in `renderUnit` harvester/tank sections: `rrect(ctx, 6, s-20, 26, 2, col.primary)` missing the `r` argument). These errors are **pre-existing** — verified by `git stash` + re-run; they existed at original lines 751 and 799 before this task. They are outside the building rendering section and were left untouched per "DO NOT change any other functions."
+    31→    31→
+    32→    32→### Next actions for integration agent
+    33→    33→- Update `src/app/page.tsx` calls to pass footprints:
+    34→    34→  - `drawBuilding(ctx, b.type, b.owner, b.x*TILE_SIZE, b.y*TILE_SIZE, b.w, b.h)`
+    35→    35→  - `getBuildingPreview(selBld.type, 'atreides', 48, selBld.w, selBld.h)`
+    36→    36→  - `getBuildingPreview(t, 'atreides', 40, <footprintW>, <footprintH>)` for the build menu (look up footprint from a BUILDING_FOOTPRINTS map or from CONFIG)
+    37→    37→- Update build-mode hover preview rectangle to use `b.w * TILE_SIZE, b.h * TILE_SIZE` instead of single `TILE_SIZE`.
+    38→    38→- Optionally fix the 2 pre-existing `rrect` argument errors in `renderUnit` (harvester line ~1442, tank line ~1490).
+    39→    39→
+    40→    40→## Task 8-futuristic: Rewrite renderBuilding for sci-fi/futuristic aesthetic
+    41→    41→**Agent:** general-purpose sub-agent
+    42→    42→**File modified:** `src/lib/tile-renderer.ts` (only the `renderBuilding` body — the if/else if chain inside the function, ~lines 579-1652)
+    43→    43→
+    44→    44→### Summary
+    45→    45→Completely rewrote the drawing code inside `renderBuilding` so ALL 6 buildings look futuristic/sci-fi (Dune 1984/2021 movie aesthetic) instead of rustic wooden huts or fairy-tale castles. Function signature, cache, shadow setup, and all other functions left untouched. Only the `if (type === 'palace') {...} else if ...` chain was replaced.
+    46→    46→
+    47→    47→### Design philosophy
+    48→    48→- **Primary palette = metallic grays** (`#1a1a1a` → `#9a9a9a`), NOT faction colors or wood tones
+    49→    49→- **Faction colors used only as subtle accents** (1-2px stripes, banner, door indicator dots)
+    50→    50→- **Glowing elements:** cyan `#00d0ff` for energy/tech, orange `#ff8030`/`#ffa050` for spice, amber `#ffaa30` for warning lights
+    51→    51→- **Angular/geometric shapes** throughout — hexagonal pads, beveled corners, flat roofs, sawtooth glass — NO pitched/conical/pyramidal roofs
+    52→    52→- **Visible tech details:** metal panel seams, floor bands, vents, pipes, antennas, comm dishes, blast doors, hazard stripes, cooling fins, plasma core, lightning arcs, valve wheels, rivets, LEDs
+    53→    53→- **Gradients everywhere:** 24 linear gradients (metallic surfaces) + 15 radial gradients (glowing elements)
+    54→    54→
+    55→    55→### Building details
+    56→    56→- **palace (2x2 / 80x80):** Massive brutalist command fortress. Wide stepped concrete base with beveled corners + horizontal seam lines. Central tall angular command tower with metallic horizontal gradient, 4 vertical panel seams, 3 horizontal floor bands, 3 rows of glowing cyan slit windows (left+right). Flat roof pad with corner comm equipment pads. Tall central comm antenna with cyan glowing tip (radial gradient halo) + 2 side comm dishes. 4 energy shield emitter nodes (cyan radial glow) at base corners. Vertical hanging faction banner. Rectangular blast door with hazard stripes + faction indicator lights. Side louvered vents. 3 rooftop solar array panels (dark blue). Ground-level amber exhaust lights.
+    57→    57→- **barracks (2x2 / 80x80):** Angular prefab military structure. Flat roof with beveled edges + rooftop equipment housing with amber vent slits. Antenna array: tall main mast with red beacon (radial glow), shorter secondary with cyan tip, central comm dish. External coolant pipes (horizontal routes with flanges + cyan vent glow at ends). 4 vertical slit windows (cyan, 2 rows x 2 side columns) with frames. Central blast door with vertical seam, horizontal panel lines, hazard stripes, faction control panel. Side reinforcement pillars (buttresses) with rivets. Subtle faction stripe. Ground hazard line.
+    58→    58→- **factory (3x2 / 120x80):** Wide industrial facility. Flat sawtooth roof (6 angular glass panels with cyan-tint gradient + glazing bars + shadow faces + cyan glow strips at peaks — NOT pitched). 2 metallic chimneys with horizontal gradient, flared lips, reinforcement bands, and amber/orange heat vent glow (radial gradient) at tops + hot interior orange ring. Large cargo bay roll-up door (6 horizontal panel segments, 2 vertical seams, yellow-black hazard stripes, faction warning label). Glowing cyan control room window above door (with dividers). External pipes + smaller conduit + flanges + 2 spoked valve wheels. Side multi-pane cyan windows. Ground hazard zone.
+    59→    59→- **turret (1x1 / 40x40):** Compact energy cannon. Angular hexagonal base pad (reinforced, with rivets). Rotating angular box base (NOT dome) with panel seams. Raised cannon mantlet. Sleek energy cannon barrel with muzzle ring. Glowing cyan power cell (radial gradient) at barrel base. Muzzle glow (charging tip, radial gradient). Faction emblem on side. 2 amber status lights.
+    60→    60→- **refinery (2x2 / 80x80):** Spice processing plant. Lower industrial structure base. Large central cylindrical processing tank with metallic horizontal gradient, reinforced top rim, 2 reinforcement band rings with rivets. 2 spice glow viewports (translucent orange gradient with dividers). Spice glow halo around tank top. Tank top valve/outlet assembly + rising outlet pipe + orange spice fume vent glow. 2 side crystallization vats (smaller cylinders with spice glow viewports + top rims). Connecting pipes (tank→vats) with flanges. 2 large spoked valve wheels with spice-orange center glow. Spice glow windows on lower structure. Central access door with hazard stripes. Spice stain spill + glowing crystal specks on ground.
+    61→    61→- **generator (2x2 / 80x80):** Power plant with vertical plasma core. Reactor housing. 2 vertical cooling fin stacks (10 slit lines each, top cap with cyan vent glow). Top horizontal vent assembly with slats. Central vertical plasma core: outer cyan halo (radial gradient), containment ring (mechanical housing with 8 bolt mounts), bright cyan plasma (white center → cyan → deep cyan radial gradient), cyan containment grid bars. 4 cyan lightning arcs (jagged bolts in 4 directions). Energy pylon/antenna with ceramic insulators + cyan tip glow. 5 cyan conduit LEDs along bottom (radial glow each). 2 status display panels (cyan + amber). Faction accent stripe.
+    62→    62→
+    63→    63→### Removal of old rustic elements (verified absent)
+    64→    64→All of the following were completely eliminated from `renderBuilding`:
+    65→    65→- Conical/pyramidal roofs, crenellations/battlements, arched doors, stained-glass windows, finials, pediments
+    66→    66→- Sandbags, supply crates, wall torches, flags on poles
+    67→    67→- Wooden colors (`#3a2a1a`, `#2a1a0a`, `#5a4a3a`, `#8a7040`, `#6a4a2a`, `#1a1208`)
+    68→    68→- Old warm yellow lights (`#ffd060`, `#fff8c0`)
+    69→    69→- Wooden flagpoles, castle roundels, conical tower roofs
+    70→    70→
+    71→    71→### Technical notes
+    72→    72→- Used `px` and `rrect` helpers throughout; `mulberry` RNG for spice crystal specks
+    73→    73→- All gradient arguments passed to `rrect` use `as any` cast (matching original code convention to bypass the `string`-only type signature of the helper)
+    74→    74→- `FACTION_COLORS` used only for subtle accents (1-2px stripes, banner, indicator dots, emblem) — metallic grays are the dominant palette
+    75→    75→- Cache key format `${type}_${faction}_${w}x${h}` unchanged
+    76→    76→
+    77→    77→### Verification
+    78→    78→- `cd /home/z/my-project && bun run lint` → **clean** (no eslint output)
+    79→    79→- `bunx tsc --noEmit` → 2 errors at `tile-renderer.ts:1688` and `:1736`, both in `renderUnit` (harvester/tank body: `rrect(ctx, 6, s-20, 26, 2, col.primary)` missing `r` argument). These are **pre-existing** — confirmed they are the same 2 errors documented in the Task 4-renderer worklog (originally at lines 1442/1490, now shifted by +246 lines due to the larger renderBuilding body). They are OUTSIDE `renderBuilding` and were left untouched per "DO NOT change any other functions."
+    80→    80→- Structure verified: all 6 building branches present (palace/barracks/factory/turret/refinery/generator), function ends properly with `buildingCache.set(key, c); return c; }`
+    81→    81→- Sci-fi palette verified: 27× cyan `#00d0ff`, 5× spice orange `#ff8030`, 7× amber `#ffaa30`, 91× dark metal `#1a1a1a`, 44× mid metal `#5a5a5a`, 24 linear gradients, 15 radial gradients
+    82→    82→
+    83→    83→### Next actions for integration agent
+    84→    84→- The 2 pre-existing `rrect` argument errors in `renderUnit` (harvester ~line 1688, tank ~line 1736) could optionally be fixed by adding the missing `r` parameter (e.g., `rrect(ctx, 6, s-20, 26, 2, 1, col.primary)`)
+    85→    85→- Visual review in-browser recommended to confirm the futuristic aesthetic renders correctly at all footprint sizes
+    86→    86→- If the build menu / `getBuildingPreview` scaling needs adjustment for the new taller structures (e.g., palace antenna extends to y=H*0.05), verify preview thumbnails still look good
+    87→    87→
+    88→    88→## Task dimetric-1: Semi-dimetric buildings + 8-directional unit sprites
+    89→    89→**Agent:** general-purpose sub-agent
+    90→    90→**File modified:** `src/lib/tile-renderer.ts` (only — `renderBuilding`, `drawBuilding`, `getBuildingPreview`, `renderUnitDirection` (new), `drawUnit`, plus a new `unitDirCache`)
+    91→    91→
+    92→    92→### Summary
+    93→    93→Implemented two changes requested in task dimetric-1:
+    94→    94→1. **Semi-dimetric buildings** — buildings now render with a visible vertical facade/wall rising upward from the flat top-down footprint, giving a ~30° viewing-angle look (C&C/StarCraft 2.5D style). Canvas height = footprint height + W/2.
+    95→    95→2. **8-directional unit sprites for vehicles** — harvester and tank are now pre-rendered into 8 cached rotated sprites (one per 45° direction) instead of being rotated at draw-time. Soldiers remain non-rotating.
+    96→    96→
+    97→    97→### CHANGE 1 — Semi-dimetric buildings
+    98→    98→
+    99→    99→#### `renderBuilding(type, faction, w, h)`
+   100→   100→- **Canvas size**: was `W × H`; now `W × (H + facadeHeight)` where `facadeHeight = W / 2` (2:1 height ratio per task spec).
+   101→   101→  - 2×2 palace/barracks/refinery/generator: 80×120 (was 80×80)
+   102→   102→  - 3×2 factory: 120×140 (was 120×80)
+   103→   103→  - 1×1 turret: 40×60 (was 40×40)
+   104→   104→- **Layout in canvas**:
+   105→   105→  - `y = 0 .. facadeHeight`: NEW vertical facade wall (the front face of the building, rising upward from the base — sits ABOVE the footprint in canvas space, which is "upward" visually after the `-facadeHeight` offset in `drawBuilding`).
+   106→   106→  - `y = facadeHeight .. facadeHeight + H`: existing top-down footprint artwork, wrapped in `ctx.save(); ctx.translate(0, facadeHeight); …existing per-building code… ctx.restore();`. All existing futuristic artwork (palace antenna, barracks slit windows, factory sawtooth roof, turret cannon, refinery tank, generator plasma core) is preserved unchanged — only its canvas y-origin is shifted down by `facadeHeight`.
+   107→   107→- **Facade drawing** (new, generic for all 6 building types — futuristic aesthetic matching the existing palette):
+   108→   108→  - Outer dark frame (`#0a0a0a`) + main wall gradient (`#3a3a3a` top → `#7a7a7a` bottom) suggesting perspective (top is further away / darker, bottom is closer / lighter).
+   109→   109→  - Side-wall shading: left & right edges get a `rgba(0,0,0,0.55) → transparent` gradient overlay — "darker shades for side walls, lighter for front face" per spec.
+   110→   110→  - Top edge highlight (`#8a8a8a` + `#6a6a6a`) — sun-baked parapet rim.
+   111→   111→  - 2 horizontal panel seams (reinforced concrete bands) + N vertical panel seams (`numVSeams = max(3, floor(W/20))`).
+   112→   112→  - 2 rows × N cols of glowing cyan slit windows (`#0080a0` frame + `#00d0ff` glow + `#80e8ff` highlight + `#1a1a1a` frame top/bottom). `winCols = max(2, floor(W/24))` so wider buildings get more windows.
+   113→   113→  - Faction accent stripe (`col.primary` + `col.trim`) at the bottom of the facade, just above the footprint — visually ties the facade to the building's faction.
+   114→   114→- All existing per-building futuristic details (glowing windows, pipes, antennas, energy cores) are preserved on the footprint portion; the facade adds a complementary layer of futuristic detail (windows, panel seams, faction stripe) on the vertical wall.
+   115→   115→
+   116→   116→#### `drawBuilding(ctx, type, faction, px_, py_, w, h)`
+   117→   117→- Now offsets the building image upward by `facadeH = (w * TILE_SIZE) / 2` so the FOOTPRINT portion of the image sits at the building's tile position (`py_`) and the facade rises upward above the tile:
+   118→   118→  ```ts
+   119→   119→  const img = renderBuilding(type, faction, w, h)
+   120→   120→  const facadeH = (w * TILE_SIZE) / 2
+   121→   121→  ctx.drawImage(img, px_, py_ - facadeH)
+   122→   122→  ```
+   123→   123→
+   124→   124→#### `getBuildingPreview(type, faction, size, w, h)`
+   125→   125→- Scale formula updated to fit the now-taller image inside the square preview canvas:
+   126→   126→  - Old: `size / (Math.max(w, h) * TILE_SIZE)` — clipped the new taller images.
+   127→   127→  - New: `size / Math.max(imgW, imgH)` where `imgW = w*TILE_SIZE` and `imgH = (h + w/2)*TILE_SIZE`.
+   128→   128→- Preview image is now also horizontally centered: `ctx.drawImage(img, (size/scale - imgW)/2, 0)` so taller-than-wide buildings (all of them now, since facadeHeight > 0) don't hug the left edge of the preview thumbnail.
+   129→   129→
+   130→   130→### CHANGE 2 — 8-directional unit sprites for vehicles
+   131→   131→
+   132→   132→#### New `unitDirCache = new Map<string, HTMLCanvasElement>()`
+   133→   133→- Added next to `unitCache`. Keyed by `${type}_${faction}_${dir}` (dir 0–7).
+   134→   134→
+   135→   135→#### New `renderUnitDirection(type, faction, dir)` function
+   136→   136→- Returns a cached `TILE_SIZE × TILE_SIZE` canvas containing the base vehicle sprite (from `renderUnit`) rotated `dir * 45°` around the tile center.
+   137→   137→- `imageSmoothingEnabled = true` for clean rotated edges.
+   138→   138→- dir convention (clockwise in canvas coords because +Y is down — matches the `drawUnit` comment in the task spec):
+   139→   139→  - 0=E, 1=SE, 2=S, 3=SW, 4=W, 5=NW, 6=N, 7=NE
+   140→   140→- Caches all 8 directions lazily on first use; subsequent calls hit the cache.
+   141→   141→
+   142→   142→#### Updated `drawUnit(ctx, type, faction, px_, py_, bob, facing)`
+   143→   143→- `soldier`: unchanged behavior — calls `renderUnit` directly and draws with bob (soldiers always face the player).
+   144→   144→- `harvester` / `tank`: no longer rotates via `ctx.save/translate/rotate/restore` at draw-time. Instead:
+   145→   145→  1. Normalizes `facing` to `[0, 2π)`.
+   146→   146→  2. Snaps to nearest 45° step: `dir = Math.round(angle / (π/4)) % 8`.
+   147→   147→  3. Calls `renderUnitDirection(type, faction, dir)` to get the pre-rendered rotated sprite.
+   148→   148→  4. Draws the sprite at `(px_ - TILE_SIZE/2, py_ - TILE_SIZE/2 + bob)`.
+   149→   149→- This means each vehicle now has 8 visually distinct direction sprites cached in memory (2 types × 4 factions × 8 dirs = up to 64 cached canvases total, each 40×40 — negligible memory). Draw-time rotation is eliminated.
+   150→   150→
+   151→   151→### Verification
+   152→   152→- `cd /home/z/my-project && bun run lint` → **clean** (no eslint output).
+   153→   153→- `bunx tsc --noEmit` → 2 errors at `tile-renderer.ts:1772` and `:1820`. These are the **pre-existing** `rrect` argument errors in `renderUnit` (harvester body line ~1772, tank body line ~1820 — shifted from the previous 1688/1736 by +84 due to the new facade code). They are OUTSIDE the building rendering section and OUTSIDE the new `renderUnitDirection`/`drawUnit` changes; they exist in the unchanged harvester/tank body code inside `renderUnit` and were documented in the prior two worklog entries (Task 4-renderer and Task 8-futuristic). Next.js is configured with `typescript.ignoreBuildErrors: true` so these do not block the build.
+   154→   154→- No new TS or lint errors introduced by this task.
+   155→   155→- Verified structurally:
+   156→   156→  - `renderBuilding` opens `ctx.save(); ctx.translate(0, facadeHeight)` after the facade block, and closes with `ctx.restore()` immediately before `buildingCache.set(key, c); return c` — so all per-building branches (palace/barracks/factory/turret/refinery/generator) execute inside the translated scope and render at the bottom of the taller canvas.
+   157→   157→  - `drawBuilding` uses `py_ - facadeH` offset exactly as specified in the task.
+   158→   158→  - `renderUnitDirection` rotates the base sprite by `dir * π/4` and caches it; `drawUnit` snaps facing to the nearest of 8 directions for vehicles.
+   159→   159→
+   160→   160→### Next actions for integration agent
+   161→   161→- **Visual review in-browser** is recommended: confirm the facade looks good above each building type, that the `-facadeHeight` offset doesn't cause buildings to overlap the tile above them inappropriately (especially tall palace/barracks/refinery/generator which are 120px tall on 40px tiles — they'll extend 80px above their tile, i.e. 2 tiles up). The integration agent may want to adjust building render order to back-to-front (top-of-map first) so facades don't overlap buildings above them, OR accept the overlap as a stylistic choice (C&C-style).
+   162→   162→- The 2 pre-existing `rrect` argument errors in `renderUnit` (now at lines ~1772 and ~1820) could optionally be fixed by adding the missing `r` parameter (e.g. `rrect(ctx, 6, s-20, 26, 2, 1, col.primary)`). Not required for this task.
+   163→   163→- If the build menu / selected-building preview (`getBuildingPreview` at 48px) looks too small for the now-taller images, the integration agent can increase the preview `size` argument or adjust the build menu card layout.
+   164→   164→
+   165→   165→## Task vehicles-8dir: 8-directional vehicle sprites + animations + building damage/power
+   166→   166→**Agent:** general-purpose sub-agent
+   167→   167→**Files modified:** `src/lib/tile-renderer.ts` (vehicle rendering section + building overlay section), `src/app/page.tsx` (2 call sites)
+   168→   168→
+   169→   169→### Summary
+   170→   170→Replaced the rotation-based `renderUnitDirection` with **unique per-direction sprite drawing** (no more rotating one base image). Tanks and harvesters now have distinct side / front / rear / diagonal views. Added soldier walking animation, harvester harvest-dust particles, building damage overlays (cracks/smoke/fire), and a low-power indicator (dimmer + red blink + window flicker). Also fixed the 8 pre-existing `rrect` missing-argument TS errors (2 in `renderUnit` + 6 in the new code that replicated the same buggy stripe pattern).
+   171→   171→
+   172→   172→### 1. Unique 8-directional vehicle sprites (NO rotation)
+   173→   173→
+   174→   174→#### Direction convention
+   175→   175→`dir = Math.round(facing / (Math.PI / 4)) % 8` — 0=E, 1=SE, 2=S, 3=SW, 4=W, 5=NW, 6=N, 7=NE (clockwise, canvas +Y down). Same as before.
+   176→   176→
+   177→   177→#### New drawing helpers (all use `px`, `rrect`, `FACTION_COLORS`, `mulberry`; Canvas 2D only)
+   178→   178→- **`drawShadow(ctx, cx, y, rx, ry)`** — shared ground-shadow ellipse.
+   179→   179→- **Tank:**
+   180→   180→  - `drawTankSide(ctx, col, s, turretDy)` — full side profile facing right (East). Long hull, full-length tracks, turret on top with cannon pointing right, muzzle brake, hatch, side trim details. `turretDy` shifts the turret vertically (used by diagonals).
+   181→   181→  - `drawTankFront(ctx, col, s)` — South/front view: 2 separate tracks (left+right), wider shorter hull, sloped front armor trapezoid, 2 glowing headlight radial-gradient glows, turret box facing viewer with circular cannon mantlet (cannon points AT viewer).
+   182→   182→  - `drawTankRear(ctx, col, s)` — North/rear view: 2 tracks, hull, dark engine deck plate, 2 exhaust pipes with orange heat-glow radial gradients, turret box with rear vent.
+   183→   183→  - `drawTankDir(ctx, col, dir)` — dispatcher: E=side, W=mirrored side (ctx.scale(-1,1)), S=front, N=rear, diagonals=side (E or W) with `turretDy=+1` (SE/SW, viewer above) or `-1` (NE/NW, viewer below) for 3/4 foreshortening feel.
+   184→   184→- **Harvester:** same structure — `drawHarvesterSide` (scoop on RIGHT/front for East, cabin behind, spice load on top, exhaust on left/rear), `drawHarvesterFront` (wide scoop deflector, centered cabin with window), `drawHarvesterRear` (engine deck, 2 exhaust pipes, dumping chute), `drawHarvesterDir` (dispatcher, same mirror + diagonal logic as tank).
+   185→   185→- **`renderUnitDirection(type, faction, dir)`** — rewritten to call the above helpers (NO `ctx.rotate`). Caches in `unitDirCache` keyed by `${type}_${faction}_${dir}` as before. `renderUnit` (base sprite, used by UI previews) kept unchanged.
+   186→   186→
+   187→   187→#### `drawUnit` signature (backward-compatible extension)
+   188→   188→```ts
+   189→   189→drawUnit(ctx, type, faction, px_, py_, bob = 0, facing = 0,
+   190→   190→         animPhase = 0, state: string = 'idle', _cargo = 0)
+   191→   191→```
+   192→   192→- First 6 params unchanged (existing callers still work).
+   193→   193→- `animPhase` / `state` / `_cargo` are new optional params (page.tsx updated to pass `tNow, u.state`).
+   194→   194→- **Soldier branch:** no longer calls `renderUnit`; instead calls `drawSoldierAnim` directly (not cached) so the leg frame can change per-frame. Bob is halved (`bob * 0.5`) for subtlety.
+   195→   195→- **Vehicle branch:** same dir-snap logic, calls `renderUnitDirection(type, faction, dir)`. If `type==='harvester' && state==='harvest'`, additionally calls `drawHarvestDust`.
+   196→   196→
+   197→   197→### 2. Soldier walking animation
+   198→   198→`drawSoldierAnim(ctx, col, s, animPhase, moving)`:
+   199→   199→- 2-frame leg cycle: `legFrame = moving ? Math.floor(animPhase * 2) % 2 : 0`.
+   200→   200→  - Frame 0: left leg forward (longer, foot lower), right leg back (shorter).
+   201→   201→  - Frame 1: right leg forward, left leg back.
+   202→   202→  - ≈5 changes/sec when `animPhase = tNow = Date.now()/400` (matches the existing bob frequency `sin(tNow*6)`).
+   203→   203→- Only animates when `moving` (state is move/attack/return).
+   204→   204→- Body/head/helmet/rifle/backpack identical to the original `renderUnit` soldier (so the sprite reads as the same unit, just with moving legs).
+   205→   205→
+   206→   206→### 3. Harvester harvesting dust
+   207→   207→`drawHarvestDust(ctx, px_, py_, dir, animPhase)`:
+   208→   208→- Computes the scoop position from `dir` (front of harvester in the facing direction): `sx = px_ + cos(dir*π/4)*14`, `sy = py_ + sin(dir*π/4)*14`.
+   209→   209→- Fixed RNG seed (`mulberry(2024)`) for stable base positions; `animPhase` drives outward drift + upward rise + fade for a continuous dust-kicking effect.
+   210→   210→- 9 small tan particles (`rgba(214,182,122,...)`) + 3 larger lighter puffs (`rgba(196,164,108,0.3)`).
+   211→   211→
+   212→   212→### 4. Building damage overlays
+   213→   213→`drawBuildingDamage(ctx, x, y, w, h, hpRatio, animPhase, seed)`:
+   214→   214→- **HP < 75%:** 3 dark jagged crack lines (2-segment polylines) on the facade, alpha 0.7.
+   215→   215→- **HP < 50%:** 4 more cracks (alpha 0.8) + 3 rising gray smoke particles (animate upward, grow, fade) from the roof.
+   216→   216→- **HP < 25%:** 5 heavy cracks (lineWidth 1.5, alpha 0.9) + 5 fire dots (orange/red radial-gradient flicker, animated by `sin(t*10..14)`) + 5 darker smoke particles.
+   217→   217→- Cracks use a deterministic seed derived from the building's pixel position (`Math.floor(px_) * 73856093 ^ Math.floor(py_) * 19349663`) so they don't jitter between frames; smoke/fire are animated by `animPhase`.
+   218→   218→
+   219→   219→### 5. Low-power indicator
+   220→   220→`drawLowPowerOverlay(ctx, x, y, w, h, animPhase)`:
+   221→   221→- **Dimmer:** semi-transparent dark-blue rect over the building, alpha flickers 0.23–0.42 (suggests power dipping) via `sin(animPhase*8)` + step function.
+   222→   222→- **Red warning light:** blinks on/off at ~0.75 Hz (`Math.floor(animPhase*1.5) % 2`); when on, draws a radial-gradient red glow + solid red dot at the top-center of the building.
+   223→   223→- **Window flicker:** 4 small 2×3 dots on the facade, each alternates between lit (cyan `rgba(0,208,255,0.45)`) and dark (`rgba(0,0,0,0.55)`) on a staggered cycle (`(floor(animPhase*2) + i) % 3`).
+   224→   224→
+   225→   225→### 6. `drawBuilding` signature (backward-compatible extension)
+   226→   226→```ts
+   227→   227→drawBuilding(ctx, type, faction, px_, py_, w = 1, h = 1,
+   228→   228→             hp = 1, maxHp = 1, powered = true, animPhase = 0)
+   229→   229→```
+   230→   230→- First 6 params unchanged. New optional params drive the overlays.
+   231→   231→- Draws the cached building image, then:
+   232→   232→  - If `!powered`: calls `drawLowPowerOverlay`.
+   233→   233→  - If `hp/maxHp < 0.75`: calls `drawBuildingDamage` (with deterministic seed from position).
+   234→   234→
+   235→   235→### 7. page.tsx call-site updates
+   236→   236→- `drawBuilding(ctx, b.type, b.owner, b.x*TILE_SIZE, b.y*TILE_SIZE, b.w, b.h, b.hp, b.maxHp, hasPower(s, b.owner), tNow)`
+   237→   237→- `drawUnit(ctx, u.type, u.owner, u.x*TILE_SIZE, u.y*TILE_SIZE, bob, u.facing, tNow, u.state)`
+   238→   238→- `hasPower` was already imported from game-engine; checks the player's whole-base power (energyMax >= energyDemand). All of a player's buildings show the low-power warning simultaneously, matching C&C/StarCraft conventions.
+   239→   239→
+   240→   240→### Bug fixes (bonus)
+   241→   241→Fixed all 8 `rrect` missing-argument TS errors by adding the `r=1` radius parameter to thin stripe calls:
+   242→   242→- 2 pre-existing in `renderUnit` (harvester body stripe, tank body stripe) — documented in prior worklog entries as "pre-existing, left untouched"; now fixed.
+   243→   243→- 6 in the new directional sprite helpers (replicated the same buggy pattern `rrect(ctx, x, y, w, 2, col.primary)` → `rrect(ctx, x, y, w, 2, 1, col.primary)`).
+   244→   244→- Result: `tile-renderer.ts` now has **0** `tsc` errors (was 2 before this task; briefly 8 mid-task before the fix).
+   245→   245→
+   246→   246→### Verification
+   247→   247→- `cd /home/z/my-project && bun run lint` → **clean** (no eslint output).
+   248→   248→- `bunx tsc --noEmit` → **0 errors in `src/lib/tile-renderer.ts`** (down from 2 pre-existing). Remaining 91 errors are all pre-existing in `src/app/page.tsx` (string-widened `b.type`/`u.type`, `u.cargo` not on base `Unit` type) and `src/lib/entity.ts` (interface mismatches) — all unrelated to this task and present before. Next.js `typescript.ignoreBuildErrors: true` so none block the build.
+   249→   249→- Structural check: all 14 new helper functions present and dispatched correctly; `renderUnit` (UI previews) and `drawUnit`/`drawBuilding` signatures backward-compatible (defaults preserve old callers).
+   250→   250→
+   251→   251→### Next actions for integration agent
+   252→   252→- **Visual review in-browser** recommended: confirm the 8 directional sprites read correctly (especially the diagonal turret shift and the front/rear views), that soldier legs animate smoothly while moving and freeze when idle, that harvester dust appears when harvesting, and that damaged/low-power buildings show the overlays at the right HP/power thresholds.
+   253→   253→- The remaining pre-existing `page.tsx` TS errors (`u.cargo` not on `Unit`, `b.type`/`u.type` string widening) could be fixed by adding `cargo`/`maxCargo` to the `Unit` base interface or narrowing the `type` fields — but that's outside this task's scope.
+   254→   254→

@@ -10,12 +10,13 @@ import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Brush, Eraser, PaintBucket, Square, Grid3x3, Save, FolderOpen,
-  Download, Upload, Trash2, Undo2, Redo2, Hand, Map as MapIcon, Sparkles,
-  Play, Pause, Home, Hammer, Sword, Coins, Skull, Trophy, Eye, Zap,
+  Download, Upload, Trash2, Undo2, Redo2, Hand, Sparkles,
+  Play, Pause, Home, Hammer, Sword, Coins, Skull, Trophy, Eye, Zap, Maximize, Minimize,
+  ChevronUp,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
-  TERRAIN, TILE_SIZE, drawTerrain, drawTerrainLayer, drawBuilding, drawUnit, drawWorm,
+  TERRAIN, TILE_SIZE, drawTerrainLayer, drawBuilding, drawUnit, drawWorm,
   drawHealthBar, drawSelectionRing, drawMoveMarker,
   drawProjectile, drawExplosion, drawMuzzleFlash,
   drawRangeIndicator, drawFogOfWar, drawEnergyIcon,
@@ -24,9 +25,9 @@ import {
   FACTION_COLORS, type Faction, type BuildingType, type UnitType,
 } from '@/lib/tile-renderer'
 import {
-  createGame, tick, CONFIG, BUILD_COSTS, FOOTPRINT, RESEARCH, type GameState, type Unit, type Building,
+  createGame, tick, CONFIG, BUILD_COSTS, FOOTPRINT, TECHNOLOGIES, BUILDING_UPGRADES, type GameState, type Unit, type Building,
   canBuild, placeBuilding, queueUnit, commandMove, commandAttack,
-  cancelQueueItem, startResearch, cancelResearch, getUpgrade, upgradeGenerator,
+  cancelQueueItem, startTechResearch, startBuildingUpgrade, isTechResearched, getUpgrade, upgradeGenerator, upgradeTurret,
   idx, isWalkable, isBuildable, buildingAt, dist, inBounds,
   pickUnitAt, pickBuildingAt, hasPower,
   typeRu, unitName, bldName, factionRu,
@@ -127,11 +128,26 @@ function floodFill(grid: number[], w: number, h: number, x: number, y: number, t
 export default function EditorPage() {
   const [mode, setMode] = useState<'menu' | 'editor' | 'game'>('menu')
   const [difficulty, setDifficulty] = useState<'easy'|'medium'|'hard'>('medium')
+  const [isFullscreen, setIsFullscreen] = useState(false)
+
+  // Fullscreen API — hides browser UI (kiosk mode)
+  const toggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.().catch(() => {})
+    } else {
+      document.exitFullscreen?.().catch(() => {})
+    }
+  }, [])
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', onFsChange)
+    return () => document.removeEventListener('fullscreenchange', onFsChange)
+  }, [])
 
   // editor state
-  const [gridW, setGridW] = useState(32)
-  const [gridH, setGridH] = useState(32)
-  const [grid, setGrid] = useState<number[]>(() => generateDefaultMap(32, 32))
+  const [gridW, setGridW] = useState(48)
+  const [gridH, setGridH] = useState(48)
+  const [grid, setGrid] = useState<number[]>(() => generateDefaultMap(48, 48))
   const [terrainVer, setTerrainVer] = useState(0)  // bump to invalidate terrain cache
   // invalidate terrain cache whenever grid changes
   useEffect(() => { clearTerrainCache(); setTerrainVer(v => v + 1) }, [grid, gridW, gridH])
@@ -306,7 +322,7 @@ export default function EditorPage() {
     return () => window.removeEventListener('keydown', onKey)
   }, [mode, history, redoStack, grid, mapName, gridW, gridH])
 
-  if (mode === 'menu') return <MenuScreen mode={mode} setMode={setMode} difficulty={difficulty} setDifficulty={setDifficulty} onStartGame={startGame} onOpenEditor={() => setMode('editor')} />
+  if (mode === 'menu') return <MenuScreen mode={mode} setMode={setMode} difficulty={difficulty} setDifficulty={setDifficulty} onStartGame={startGame} onOpenEditor={() => setMode('editor')} isFullscreen={isFullscreen} toggleFullscreen={toggleFullscreen} />
 
   if (mode === 'editor') {
     const tools: {id:Tool;icon:any;label:string}[] = [
@@ -405,16 +421,17 @@ export default function EditorPage() {
   }
 
   // GAME MODE
-  return <GameScreen difficulty={difficulty} terrain={grid} w={gridW} h={gridH} onExit={() => setMode('menu')} />
+  return <GameScreen difficulty={difficulty} terrain={grid} w={gridW} h={gridH} onExit={() => setMode('menu')} isFullscreen={isFullscreen} toggleFullscreen={toggleFullscreen} />
 }
 
 // ============================================================
 //  MENU SCREEN
 // ============================================================
-function MenuScreen({ setMode, difficulty, setDifficulty, onStartGame, onOpenEditor }: {
+function MenuScreen({ setMode, difficulty, setDifficulty, onStartGame, onOpenEditor, isFullscreen, toggleFullscreen }: {
   mode: string; setMode: (m:'menu'|'editor'|'game')=>void
   difficulty: 'easy'|'medium'|'hard'; setDifficulty: (d:'easy'|'medium'|'hard')=>void
   onStartGame: ()=>void; onOpenEditor: ()=>void
+  isFullscreen: boolean; toggleFullscreen: ()=>void
 }) {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center text-neutral-100 relative overflow-hidden"
@@ -449,6 +466,11 @@ function MenuScreen({ setMode, difficulty, setDifficulty, onStartGame, onOpenEdi
             </Button>
           </div>
 
+          {/* Fullscreen toggle — kiosk mode */}
+          <Button size="sm" variant="ghost" onClick={toggleFullscreen} className="w-full h-10 text-sm touch-manipulation">
+            {isFullscreen ? <><Minimize className="w-4 h-4 mr-2"/> Выйти из полного экрана</> : <><Maximize className="w-4 h-4 mr-2"/> Полный экран (киоск)</>}
+          </Button>
+
           <div className="text-xs text-neutral-500 text-left space-y-1 pt-2 border-t border-neutral-800">
             <p>• Вы — Дом Атрейдес (синий). Враг — Харконнен (фиолетовый).</p>
             <p>• Добывайте спайс доставщиками, стройте казармы и фабрики.</p>
@@ -464,11 +486,37 @@ function MenuScreen({ setMode, difficulty, setDifficulty, onStartGame, onOpenEdi
 // ============================================================
 //  GAME SCREEN
 // ============================================================
-function GameScreen({ difficulty, terrain, w, h, onExit }: {
+function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFullscreen }: {
   difficulty: 'easy'|'medium'|'hard'; terrain: number[]; w: number; h: number; onExit: ()=>void
+  isFullscreen: boolean; toggleFullscreen: ()=>void
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const gameRef = useRef<GameState>(createGame(w, h, [...terrain], difficulty))
+
+  // Center viewport on player's palace at game start
+  const centerOnBase = useCallback(() => {
+    const wrap = canvasWrapRef.current
+    if (!wrap) return
+    const s = gameRef.current
+    const palace = s.buildings.find(b => b.owner === 'atreides' && b.type === 'palace')
+    if (!palace) return
+    const z = zoomRef.current
+    // palace center in world pixels
+    const baseX = (palace.x + palace.w / 2) * TILE_SIZE
+    const baseY = (palace.y + palace.h / 2) * TILE_SIZE
+    // pan so base center → screen center: pan = screenCenter - baseCenter*zoom
+    const panX = wrap.clientWidth / 2 - baseX * z
+    const panY = wrap.clientHeight / 2 - baseY * z
+    const np = { x: panX, y: panY }
+    panRef.current = np
+    setPan(np)
+  }, [])
+
+  // Center on base when game starts (after canvas mount)
+  useEffect(() => {
+    const t = setTimeout(centerOnBase, 100)
+    return () => clearTimeout(t)
+  }, [centerOnBase])
   // offscreen cache for terrain layer (expensive to redraw every frame)
   const terrainCacheRef = useRef<HTMLCanvasElement | null>(null)
   const terrainCacheVerRef = useRef<number>(-1)
@@ -481,12 +529,23 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
   const [buildMode, setBuildMode] = useState<BuildingType | null>(null)
   const [hoverCell, setHoverCell] = useState<{x:number,y:number}|null>(null)
   const [showHelp, setShowHelp] = useState(false)
-  const [zoom, setZoom] = useState(1)
+  const [zoom, setZoom] = useState(1.0)
+  const [pan, setPan] = useState<{x: number; y: number}>({x: 0, y: 0})
+  const [panelOpen, setPanelOpen] = useState(false)
+  const canvasWrapRef = useRef<HTMLDivElement>(null)
   const selectedRef = useRef(selected); selectedRef.current = selected
   const buildModeRef = useRef(buildMode); buildModeRef.current = buildMode
   const pausedRef = useRef(paused); pausedRef.current = paused
   const zoomRef = useRef(zoom); zoomRef.current = zoom
+  const panRef = useRef(pan); panRef.current = pan
   const hoverCellRef = useRef(hoverCell); hoverCellRef.current = hoverCell
+  const panelOpenRef = useRef(panelOpen); panelOpenRef.current = panelOpen
+  // mouse middle-button pan
+  const mousePanRef = useRef<{x:number;y:number;panning:boolean} | null>(null)
+  // Pointer events (unified mouse + touch)
+  const pointerStateRef = useRef<{startX:number;startY:number;lastX:number;lastY:number;moved:boolean;isDown:boolean;isTwoFinger:boolean;pinchDist:number}>({startX:0,startY:0,lastX:0,lastY:0,moved:false,isDown:false,isTwoFinger:false,pinchDist:0})
+  // touch state: track single-finger drag for pan vs tap
+  const touchStateRef = useRef<{startX:number, startY:number, lastX:number, lastY:number, moved:boolean, startTime:number}>({startX:0, startY:0, lastX:0, lastY:0, moved:false, startTime:0})
 
   // ---- zoom with mouse wheel ----
   const onWheel = (e: React.WheelEvent) => {
@@ -497,9 +556,226 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
       return nz
     })
   }
-  // reset zoom on Esc
+  // ---- pinch-to-zoom (two fingers) + pan (one finger drag) ----
+  const pinchRef = useRef<{ dist: number } | null>(null)
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      const t0 = e.touches[0], t1 = e.touches[1]
+      pinchRef.current = { dist: Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY) }
+      touchStateRef.current.moved = true  // disable tap when pinching
+    } else if (e.touches.length === 1) {
+      const t = e.touches[0]
+      touchStateRef.current = { startX: t.clientX, startY: t.clientY, lastX: t.clientX, lastY: t.clientY, moved: false, startTime: Date.now() }
+    }
+  }
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      // pinch zoom
+      e.preventDefault()
+      const t0 = e.touches[0], t1 = e.touches[1]
+      const dist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY)
+      if (pinchRef.current) {
+        const ratio = dist / pinchRef.current.dist
+        setZoom(z => {
+          const nz = Math.max(0.7, Math.min(2.5, +(z * ratio).toFixed(2)))
+          zoomRef.current = nz
+          return nz
+        })
+      }
+      pinchRef.current = { dist }
+    } else if (e.touches.length === 1) {
+      const t = e.touches[0]
+      const ts = touchStateRef.current
+      const dx = t.clientX - ts.lastX
+      const dy = t.clientY - ts.lastY
+      const totalDx = t.clientX - ts.startX
+      const totalDy = t.clientY - ts.startY
+      // if moved more than 8px, it's a drag (pan), not a tap
+      if (Math.hypot(totalDx, totalDy) > 8) {
+        ts.moved = true
+        e.preventDefault()
+        setPan(p => {
+          const np = { x: p.x + dx, y: p.y + dy }
+          panRef.current = np
+          return np
+        })
+      }
+      ts.lastX = t.clientX
+      ts.lastY = t.clientY
+    }
+  }
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    pinchRef.current = null
+    const ts = touchStateRef.current
+    if (ts.moved) return
+    const touch = e.changedTouches[0]
+    if (!touch) return
+    const fakeEvt = { clientX: touch.clientX, clientY: touch.clientY, button: 0, shiftKey: false, preventDefault: () => {} } as any
+    handleTap(fakeEvt)
+  }
+
+  // ---- Pointer events (unified mouse + touch) ----
+  const handlePointerDown = (e: React.PointerEvent) => {
+    // Middle mouse = pan
+    if (e.button === 1) {
+      mousePanRef.current = {x:e.clientX, y:e.clientY, panning:true}
+      e.preventDefault()
+      return
+    }
+    // Left click / single touch
+    if (e.button !== 0 && e.pointerType !== 'touch') return
+    const ps = pointerStateRef.current
+    ps.startX = e.clientX
+    ps.startY = e.clientY
+    ps.lastX = e.clientX
+    ps.lastY = e.clientY
+    ps.moved = false
+    ps.isDown = true
+    ps.isTwoFinger = false
+  }
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    const ps = pointerStateRef.current
+    if (!ps.isDown) return
+
+    const dx = e.clientX - ps.lastX
+    const dy = e.clientY - ps.lastY
+    const totalDx = e.clientX - ps.startX
+    const totalDy = e.clientY - ps.startY
+
+    // If moved > 8px → it's a drag (pan), not a tap
+    if (Math.hypot(totalDx, totalDy) > 8) {
+      ps.moved = true
+      setPan(p => {
+        const np = { x: p.x + dx, y: p.y + dy }
+        panRef.current = np
+        return np
+      })
+    }
+    ps.lastX = e.clientX
+    ps.lastY = e.clientY
+  }
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    const ps = pointerStateRef.current
+    if (!ps.isDown) return
+    ps.isDown = false
+
+    if (mousePanRef.current) {
+      mousePanRef.current.panning = false
+    }
+
+    // If not moved → it's a tap
+    if (!ps.moved) {
+      const fakeEvt = { clientX: e.clientX, clientY: e.clientY, button: 0, shiftKey: false, preventDefault: () => {} } as any
+      handleTap(fakeEvt)
+    }
+  }
+
+  // Unified tap/click handler — used by both mouse and touch
+  const handleTap = (e: any) => {
+    const s = gameRef.current
+    const cell = cellFromEvt(e); if (!cell) return
+    const pt = pointFromEvt(e)
+    const sel = selectedRef.current
+    const bm = buildModeRef.current
+
+    // 1. Build mode — place or cancel
+    if (bm) {
+      if (placeBuilding(s, 'atreides', bm, cell.x, cell.y)) {
+        setBuildMode(null)
+      } else {
+        setBuildMode(null)
+      }
+      forceRender(n=>n+1); return
+    }
+
+    // 2. Check what's at tap point
+    const tappedUnit = pickUnitAt(s, pt.x, pt.y, 'atreides', 1.5)
+    const tappedBld = tappedUnit ? null : pickBuildingAt(s, pt.x, pt.y, 'atreides')
+    const tappedEnemy = tappedUnit ? null : pickUnitAt(s, pt.x, pt.y, undefined, 1.5)
+    const tappedEnemyBld = (tappedUnit || tappedBld) ? null : pickBuildingAt(s, pt.x, pt.y)
+
+    // 3. If a BUILDING is selected → tap empty = deselect, tap building = switch
+    if (sel?.type === 'building') {
+      if (tappedBld) {
+        setSelected({ type:'building', id:tappedBld.id })
+        setPanelOpen(true)
+        forceRender(n=>n+1); return
+      }
+      if (tappedUnit) {
+        setSelected({ type:'unit', id:tappedUnit.id })
+        forceRender(n=>n+1); return
+      }
+      // tap on empty → deselect
+      setSelected(null)
+      setPanelOpen(false)
+      forceRender(n=>n+1); return
+    }
+
+    // 4. If a UNIT is selected
+    if (sel?.type === 'unit') {
+      const u = s.units.find(u=>u.id===sel.id)
+      if (u) {
+        // tap on same unit → toggle panel
+        if (tappedUnit && tappedUnit.id === u.id) {
+          setPanelOpen(p => !p)
+          forceRender(n=>n+1); return
+        }
+        // tap on another friendly unit → switch selection (no panel)
+        if (tappedUnit) {
+          setSelected({ type:'unit', id:tappedUnit.id })
+          forceRender(n=>n+1); return
+        }
+        // tap on friendly building → switch selection + open panel
+        if (tappedBld) {
+          setSelected({ type:'building', id:tappedBld.id })
+          setPanelOpen(true)
+          forceRender(n=>n+1); return
+        }
+        // tap on enemy → attack order
+        if (tappedEnemy && tappedEnemy.owner !== 'atreides') {
+          commandAttack(s, u, tappedEnemy.id, false)
+          setPanelOpen(false)
+          forceRender(n=>n+1); return
+        }
+        if (tappedEnemyBld && tappedEnemyBld.owner !== 'atreides') {
+          commandAttack(s, u, tappedEnemyBld.id, true)
+          setPanelOpen(false)
+          forceRender(n=>n+1); return
+        }
+        // tap on empty map → move order
+        if (u.type !== 'harvester') {
+          commandMove(s, u, cell.x+0.5, cell.y+0.5)
+        }
+        setPanelOpen(false)
+        forceRender(n=>n+1); return
+      }
+    }
+
+    // 5. Nothing selected
+    if (tappedBld) {
+      // building → select + open panel immediately
+      setSelected({ type:'building', id:tappedBld.id })
+      setPanelOpen(true)
+    } else if (tappedUnit) {
+      // unit → select (no panel — opens on 2nd tap)
+      setSelected({ type:'unit', id:tappedUnit.id })
+    } else {
+      // empty → nothing
+    }
+    forceRender(n=>n+1)
+  }
+
+  // Deselect function (called by ✕ button in HUD or Esc)
+  const deselect = () => {
+    setSelected(null)
+    setPanelOpen(false)
+    setBuildMode(null)
+  }
+  // reset zoom/pan on Esc
   useEffect(() => {
-    const k = (e: KeyboardEvent) => { if (e.key === 'Escape') { setBuildMode(null); setZoom(1) } }
+    const k = (e: KeyboardEvent) => { if (e.key === 'Escape') { setBuildMode(null); setSelected(null); setPanelOpen(false); setZoom(1.0); centerOnBase() } }
     window.addEventListener('keydown', k)
     return () => window.removeEventListener('keydown', k)
   }, [])
@@ -525,15 +801,33 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
     const render = () => {
       const s = gameRef.current
       const c = canvasRef.current
+      const wrap = canvasWrapRef.current
       const tNow = Date.now() / 400
       const z = zoomRef.current
-      if (c) {
+      const p = panRef.current
+      if (c && wrap) {
         const ctx = c.getContext('2d')!
         const dpr = Math.min(window.devicePixelRatio || 1, 2)
-        const internalW = Math.round(s.width * TILE_SIZE * z * dpr)
-        const internalH = Math.round(s.height * TILE_SIZE * z * dpr)
+        // Canvas fills wrapper exactly (viewport = screen)
+        const wrapW = wrap.clientWidth
+        const wrapH = wrap.clientHeight
+        const internalW = Math.round(wrapW * dpr)
+        const internalH = Math.round(wrapH * dpr)
         if (c.width !== internalW || c.height !== internalH) { c.width = internalW; c.height = internalH }
-        ctx.setTransform(z * dpr, 0, 0, z * dpr, 0, 0)
+        c.style.width = `${wrapW}px`
+        c.style.height = `${wrapH}px`
+        c.style.position = 'absolute'
+        c.style.left = '0px'
+        c.style.top = '0px'
+        // CLEAR canvas each frame (prevents artifacts/trailing when panning)
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
+        ctx.clearRect(0, 0, internalW, internalH)
+        ctx.fillStyle = '#0a0604'
+        ctx.fillRect(0, 0, internalW, internalH)
+        // Transform: apply zoom + pan so map is drawn at TILE_SIZE * zoom,
+        // centered according to pan offset (in CSS pixels, scaled by dpr)
+        const scale = z * dpr
+        ctx.setTransform(scale, 0, 0, scale, p.x * dpr, p.y * dpr)
         ctx.imageSmoothingEnabled = true
 
         // --- TERRAIN CACHE: redraw only when terrainVersion changes ---
@@ -562,7 +856,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
         }
         // buildings
         for (const b of s.buildings) {
-          drawBuilding(ctx, b.type, b.owner, b.x*TILE_SIZE, b.y*TILE_SIZE, b.w, b.h)
+          drawBuilding(ctx, b.type, b.owner, b.x*TILE_SIZE, b.y*TILE_SIZE, b.w, b.h, b.hp, b.maxHp, hasPower(s, b.owner), tNow, b.level || 1)
           if (b.hp < b.maxHp) drawHealthBar(ctx, b.x*TILE_SIZE+b.w*TILE_SIZE/2, b.y*TILE_SIZE-2, b.w*TILE_SIZE-4, b.hp/b.maxHp)
           // production indicator
           if (b.queue.length > 0) {
@@ -583,7 +877,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
         for (const u of s.units) {
           const moving = u.state === 'move' || u.state === 'attack' || u.state === 'harvest' || u.state === 'return'
           const bob = moving ? Math.sin(tNow * 6 + u.id) * 1 : 0
-          drawUnit(ctx, u.type, u.owner, u.x*TILE_SIZE, u.y*TILE_SIZE, bob, u.facing)
+          drawUnit(ctx, u.type, u.owner, u.x*TILE_SIZE, u.y*TILE_SIZE, bob, u.facing, tNow, u.state)
           if (u.hp < u.maxHp) drawHealthBar(ctx, u.x*TILE_SIZE, u.y*TILE_SIZE-TILE_SIZE/2+2, TILE_SIZE-6, u.hp/u.maxHp)
           // cargo indicator for harvesters
           if (u.type === 'harvester' && u.cargo > 0) {
@@ -599,7 +893,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
         }
         // projectiles
         for (const p of s.projectiles) {
-          drawProjectile(ctx, p.x*TILE_SIZE, p.y*TILE_SIZE, p.sx*TILE_SIZE, p.sy*TILE_SIZE, p.color)
+          drawProjectile(ctx, p.x*TILE_SIZE, p.y*TILE_SIZE, p.sx*TILE_SIZE, p.sy*TILE_SIZE, p.color, !!p.beam)
         }
         // muzzle flashes
         for (const f of s.flashes) {
@@ -647,68 +941,31 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
   }, [])
 
   // ---- input ----
-  const cellFromEvt = (e: React.MouseEvent) => {
-    const c = canvasRef.current!; const r = c.getBoundingClientRect()
-    const x = Math.floor(((e.clientX-r.left)/r.width)*gameRef.current.width)
-    const y = Math.floor(((e.clientY-r.top)/r.height)*gameRef.current.height)
+  // Convert screen coords → world tile coords (accounting for pan + zoom)
+  const screenToWorld = (clientX: number, clientY: number) => {
+    const c = canvasRef.current!
+    const r = c.getBoundingClientRect()
+    const z = zoomRef.current
+    const p = panRef.current
+    // screen pixel relative to canvas top-left
+    const sx = clientX - r.left
+    const sy = clientY - r.top
+    // subtract pan, divide by zoom → world pixel; then /TILE_SIZE → tile
+    const wx = (sx - p.x) / z / TILE_SIZE
+    const wy = (sy - p.y) / z / TILE_SIZE
+    return { x: wx, y: wy }
+  }
+  const cellFromEvt = (e: any) => {
+    const w = screenToWorld(e.clientX, e.clientY)
+    const x = Math.floor(w.x), y = Math.floor(w.y)
     if (x<0||y<0||x>=gameRef.current.width||y>=gameRef.current.height) return null
     return { x, y }
   }
-  // float coords (for picking units accurately)
-  const pointFromEvt = (e: React.MouseEvent) => {
-    const c = canvasRef.current!; const r = c.getBoundingClientRect()
-    const x = ((e.clientX-r.left)/r.width)*gameRef.current.width
-    const y = ((e.clientY-r.top)/r.height)*gameRef.current.height
-    return { x, y }
-  }
+  const pointFromEvt = (e: any) => screenToWorld(e.clientX, e.clientY)
 
   const handleClick = (e: React.MouseEvent) => {
-    // Only respond to LEFT mouse button
     if (e.button !== 0) return
-    const s = gameRef.current
-    const cell = cellFromEvt(e); if (!cell) return
-    const pt = pointFromEvt(e)
-
-    // Shift + Left click = move order (alternative to right click for touchpads)
-    if (e.shiftKey) {
-      const sel = selectedRef.current
-      if (sel?.type === 'unit') {
-        const u = s.units.find(u=>u.id===sel.id)
-        if (u && u.type !== 'harvester') {
-          const enemyUnit = pickUnitAt(s, pt.x, pt.y, undefined, 1.0)
-          const enemyBld = pickBuildingAt(s, pt.x, pt.y)
-          if (enemyUnit && enemyUnit.owner !== 'atreides') {
-            commandAttack(s, u, enemyUnit.id, false); toast(`⚔ Атака: ${unitName(enemyUnit.type)}`)
-          } else if (enemyBld && enemyBld.owner !== 'atreides') {
-            commandAttack(s, u, enemyBld.id, true); toast(`⚔ Атака: ${bldName(enemyBld.type)}`)
-          } else {
-            commandMove(s, u, cell.x+0.5, cell.y+0.5)
-            toast(`→ Движение (${cell.x},${cell.y})`)
-          }
-          forceRender(n=>n+1); return
-        }
-      }
-    }
-
-    // building placement
-    const bm = buildModeRef.current
-    if (bm) {
-      if (placeBuilding(s, 'atreides', bm, cell.x, cell.y)) {
-        toast.success(`Построено: ${typeRu(bm)}`)
-        setBuildMode(null)
-      } else {
-        toast.error('Нельзя строить здесь')
-      }
-      forceRender(n=>n+1); return
-    }
-
-    // select nearest friendly unit, else building (radius picking = forgiving clicks)
-    const unit = pickUnitAt(s, pt.x, pt.y, 'atreides', 1.0)
-    const bld = pickBuildingAt(s, pt.x, pt.y, 'atreides')
-    if (unit) setSelected({ type:'unit', id:unit.id })
-    else if (bld) setSelected({ type:'building', id:bld.id })
-    else setSelected(null)
-    forceRender(n=>n+1)
+    handleTap(e)
   }
 
   const handleRightClick = (e: React.MouseEvent) => {
@@ -718,39 +975,39 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
     const pt = pointFromEvt(e)
     const sel = selectedRef.current
     if (!sel) {
-      toast.info('Сначала выберите юнита (ЛКМ)')
+      
       return
     }
     if (sel.type !== 'unit') {
-      toast.info('Здания нельзя двигать — выберите юнита')
+      
       return
     }
     const u = s.units.find(u=>u.id===sel.id)
-    if (!u) { toast.error('Юнит потерян'); setSelected(null); return }
+    if (!u) { return }
     if (u.type === 'harvester') {
-      toast.info('Доставщик добывает спайс автоматически')
+      
       return
     }
 
     // check if clicking on enemy (any enemy unit/building near cursor)
-    const enemyUnit = pickUnitAt(s, pt.x, pt.y, undefined, 1.0)
+    const enemyUnit = pickUnitAt(s, pt.x, pt.y, undefined, 1.5)
     const enemyBld = pickBuildingAt(s, pt.x, pt.y)
     if (enemyUnit && enemyUnit.owner !== 'atreides') {
-      commandAttack(s, u, enemyUnit.id, false); toast(`⚔ Атака: ${unitName(enemyUnit.type)}`)
+      commandAttack(s, u, enemyUnit.id, false)
     } else if (enemyBld && enemyBld.owner !== 'atreides') {
-      commandAttack(s, u, enemyBld.id, true); toast(`⚔ Атака: ${bldName(enemyBld.type)}`)
+      commandAttack(s, u, enemyBld.id, true)
     } else {
       commandMove(s, u, cell.x+0.5, cell.y+0.5)
-      toast(`→ Движение (${cell.x},${cell.y})`)
     }
     forceRender(n=>n+1)
   }
 
   const handleBuild = (type: BuildingType) => {
     const s = gameRef.current
-    if (s.players.atreides.credits < BUILD_COSTS[type]) { toast.error('Недостаточно кредитов'); return }
+    if (s.players.atreides.credits < BUILD_COSTS[type]) { return }
     setBuildMode(type)
-    toast.info(`Кликните по карте для постройки: ${typeRu(type)}`)
+    setSelected(null)
+    setPanelOpen(false)
   }
 
   const handleProduce = (type: UnitType) => {
@@ -762,9 +1019,9 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
       palace:['harvester'], barracks:['soldier'], factory:['tank'], turret:[], refinery:[], generator:[]
     }
     if (!prodMap[b.type].includes(type)) return
-    if (!hasPower(s, 'atreides')) { toast.error('Недостаточно энергии! Постройте генератор'); return }
-    if (queueUnit(s, b, type)) toast.success(`В производство: ${unitName(type)}`)
-    else toast.error('Недостаточно средств или здание не достроено')
+    if (!hasPower(s, 'atreides')) { return }
+    if (queueUnit(s, b, type)) { /* ok — event logged in engine */ }
+    
     forceRender(n=>n+1)
   }
 
@@ -777,145 +1034,190 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
   const harvesterCount = myUnits.filter(u=>u.type==='harvester').length
 
   return (
-    <div className="min-h-screen flex flex-col bg-neutral-950 text-neutral-100">
-      {/* Top HUD */}
-      <header className="border-b border-neutral-800 bg-neutral-900/90 backdrop-blur px-4 py-2 flex items-center gap-4 flex-wrap sticky top-0 z-20">
-        <Button size="sm" variant="ghost" onClick={onExit}><Home className="w-4 h-4 mr-1"/>Меню</Button>
-        <Separator orientation="vertical" className="h-6 bg-neutral-700" />
-        <div className="flex items-center gap-1.5 text-amber-400 font-bold">
+    <div className="fixed inset-0 flex flex-col bg-neutral-950 text-neutral-100 select-none" style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}>
+      {/* Top HUD — compact, wraps on mobile */}
+      <header className="border-b border-neutral-800 bg-neutral-900/95 backdrop-blur px-2 py-1.5 flex items-center gap-1.5 sm:gap-3 flex-wrap shrink-0 z-20">
+        <Button size="sm" variant="ghost" onClick={onExit} className="h-9 px-2.5 touch-manipulation">
+          <Home className="w-4 h-4"/>
+        </Button>
+        <div className="flex items-center gap-1 text-amber-400 font-bold text-sm">
           <Coins className="w-4 h-4" /> <span className="font-mono">{Math.floor(s.players.atreides.credits)}</span>
         </div>
-        {/* Energy indicator */}
-        <div className={`flex items-center gap-1.5 font-bold ${hasPower(s, 'atreides') ? 'text-cyan-400' : 'text-red-400'}`}>
-          <Zap className="w-4 h-4" />
-          <span className="font-mono text-xs">{s.players.atreides.energyMax - s.players.atreides.energyDemand}/{s.players.atreides.energyMax}</span>
+        <div className={`flex items-center gap-1 font-bold text-xs ${hasPower(s, 'atreides') ? 'text-cyan-400' : 'text-red-400'}`}>
+          <Zap className="w-3.5 h-3.5" />
+          <span className="font-mono">{s.players.atreides.energyMax - s.players.atreides.energyDemand}/{s.players.atreides.energyMax}</span>
         </div>
-        <Badge variant="outline" className="border-amber-700/50 text-amber-500">Атрейдес</Badge>
-        <div className="flex items-center gap-3 text-xs text-neutral-400">
-          <span>Армия: <b className="text-neutral-200">{armyCount}</b></span>
-          <span>Доставщики: <b className="text-neutral-200">{harvesterCount}</b></span>
-          <span>Здания: <b className="text-neutral-200">{myBldgs.length}</b></span>
+        <div className="hidden xs:flex items-center gap-2 text-[11px] text-neutral-400">
+          <span>⚔{armyCount}</span>
+          <span>🚚{harvesterCount}</span>
+          <span>🏗{myBldgs.length}</span>
         </div>
         <div className="flex-1" />
-        <Button size="sm" variant="ghost" onClick={()=>setPaused(p=>!p)}>
-          {paused ? <><Play className="w-4 h-4 mr-1"/>Продолжить</> : <><Pause className="w-4 h-4 mr-1"/>Пауза</>}
+        {selected && (
+          <Button size="sm" variant="ghost" onClick={deselect} className="h-9 px-2.5 touch-manipulation text-red-400" title="Снять выделение">
+            ✕
+          </Button>
+        )}
+        <Button size="sm" variant="ghost" onClick={centerOnBase} className="h-9 px-2.5 touch-manipulation" title="Центрировать на базе">
+          <Home className="w-4 h-4"/>
         </Button>
-        <Button size="sm" variant="ghost" onClick={()=>setShowHelp(h=>!h)}><Eye className="w-4 h-4 mr-1"/>Помощь</Button>
+        <Button size="sm" variant="ghost" onClick={toggleFullscreen} className="h-9 px-2.5 touch-manipulation" title="Полный экран">
+          {isFullscreen ? <Minimize className="w-4 h-4"/> : <Maximize className="w-4 h-4"/>}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={()=>setPaused(p=>!p)} className="h-9 px-2.5 touch-manipulation">
+          {paused ? <Play className="w-4 h-4"/> : <Pause className="w-4 h-4"/>}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={()=>setPanelOpen(p=>!p)} className="h-9 px-2.5 touch-manipulation lg:hidden">
+          ☰
+        </Button>
       </header>
 
+      {/* Help bar — collapsible */}
       {showHelp && (
-        <div className="bg-neutral-900 border-b border-neutral-800 px-4 py-2 text-xs text-neutral-400 flex gap-4 flex-wrap">
-          <span><b className="text-emerald-400">ЛКМ</b> — выбрать юнит/здание</span>
-          <span><b className="text-amber-400">ПКМ</b> — приказ движения/атаки</span>
-          <span><b className="text-amber-400">Shift+ЛКМ</b> — приказ (если нет ПКМ)</span>
-          <span><b className="text-neutral-200">Колесо</b> — зум</span>
-          <span><b className="text-neutral-200">Esc</b> — сброс</span>
-          <span><b className="text-neutral-200">Доставщик</b> — авто-добыча спайса</span>
-          <span><b className="text-orange-400">Червь</b> — ест юнитов на песке</span>
+        <div className="bg-neutral-900 border-b border-neutral-800 px-3 py-1.5 text-[10px] text-neutral-400 flex gap-2 flex-wrap shrink-0">
+          <span><b className="text-emerald-400">Тап</b> выбрать</span>
+          <span><b className="text-amber-400">Тап по карте</b> приказ</span>
+          <span><b className="text-neutral-200">Щипок</b> зум</span>
+          <span className="hidden sm:inline"><b className="text-neutral-200"> ПКМ</b> приказ</span>
+          <span className="hidden sm:inline"><b className="text-neutral-200"> Колесо</b> зум</span>
+          <span><b className="text-neutral-200"> Esc</b> сброс</span>
         </div>
       )}
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* Canvas */}
-        <main className="flex-1 overflow-auto bg-black flex items-start justify-center p-4">
-          <div className="shadow-2xl ring-1 ring-neutral-800 relative">
-            <canvas ref={canvasRef}
-              onMouseDown={handleClick} onContextMenu={handleRightClick}
-              onWheel={onWheel}
-              onMouseMove={e => {
-                const c = cellFromEvt(e); setHoverCell(c)
-                // live cursor feedback (no re-render needed)
-                const pt = pointFromEvt(e)
-                const s2 = gameRef.current
-                const hovering = pickUnitAt(s2, pt.x, pt.y, undefined, 1.0) || pickBuildingAt(s2, pt.x, pt.y)
-                const canvas = canvasRef.current
-                if (canvas) {
-                  if (buildMode) canvas.style.cursor = 'crosshair'
-                  else if (hovering) canvas.style.cursor = 'pointer'
-                  else if (selectedRef.current?.type === 'unit') canvas.style.cursor = 'move'
-                  else canvas.style.cursor = 'default'
-                }
-              }}
-              onMouseLeave={() => setHoverCell(null)}
-              className="block" style={{ width: `${zoom * 100}%`, aspectRatio: `${gameRef.current.width} / ${gameRef.current.height}`, height: 'auto', cursor: 'default' }} />
-            {/* CRT retro overlay — scanlines + vignette + warm grade */}
-            <div className="pointer-events-none absolute inset-0 crt-overlay" />
-            {/* Win/Lose overlay */}
-            {s.over && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur">
-                <div className="text-center">
-                  {s.winner === 'atreides' ? (
-                    <><Trophy className="w-20 h-20 text-amber-400 mx-auto mb-4" />
-                    <div className="text-5xl font-black text-amber-400 mb-2">ПОБЕДА</div>
-                    <div className="text-neutral-400 mb-6">Дворец Харконнен разрушен!</div></>
-                  ) : (
-                    <><Skull className="w-20 h-20 text-red-500 mx-auto mb-4" />
-                    <div className="text-5xl font-black text-red-500 mb-2">ПОРАЖЕНИЕ</div>
-                    <div className="text-neutral-400 mb-6">Ваш дворец пал!</div></>
-                  )}
-                  <Button onClick={onExit} size="lg" className="bg-amber-600 hover:bg-amber-700">В меню</Button>
-                </div>
+      {/* Main game area — canvas fills available space */}
+      <div className="flex-1 flex overflow-hidden min-h-0">
+        <main className="flex-1 overflow-hidden bg-black relative" ref={canvasWrapRef} style={{ touchAction: 'none' }}>
+          <canvas ref={canvasRef}
+            onMouseDown={(e) => { if (e.button === 1) { mousePanRef.current = {x:e.clientX, y:e.clientY, panning:true}; e.preventDefault() } }}
+            onPointerDown={handlePointerDown}
+            onContextMenu={handleRightClick}
+            onWheel={onWheel}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onMouseMove={e => {
+              // middle-mouse pan
+              if (mousePanRef.current?.panning) {
+                const dx = e.clientX - mousePanRef.current.x
+                const dy = e.clientY - mousePanRef.current.y
+                mousePanRef.current.x = e.clientX
+                mousePanRef.current.y = e.clientY
+                setPan(p => { const np = {x: p.x + dx, y: p.y + dy}; panRef.current = np; return np })
+                return
+              }
+              const c = cellFromEvt(e); setHoverCell(c)
+              const pt = pointFromEvt(e)
+              const s2 = gameRef.current
+              const hovering = pickUnitAt(s2, pt.x, pt.y, undefined, 1.5) || pickBuildingAt(s2, pt.x, pt.y)
+              const canvas = canvasRef.current
+              if (canvas) {
+                if (buildMode) canvas.style.cursor = 'crosshair'
+                else if (hovering) canvas.style.cursor = 'pointer'
+                else if (selectedRef.current?.type === 'unit') canvas.style.cursor = 'move'
+                else canvas.style.cursor = 'default'
+              }
+            }}
+            onMouseUp={() => { if (mousePanRef.current) mousePanRef.current.panning = false }}
+            onMouseLeave={() => { setHoverCell(null); if (mousePanRef.current) mousePanRef.current.panning = false }}
+            className="block" style={{ width: '100%', height: '100%', objectFit: 'contain', cursor: 'default', touchAction: 'none' }} />
+          {/* CRT retro overlay */}
+          <div className="pointer-events-none absolute inset-0 crt-overlay" />
+          {/* Win/Lose overlay */}
+          {s.over && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/85 backdrop-blur z-30">
+              <div className="text-center px-4">
+                {s.winner === 'atreides' ? (
+                  <><Trophy className="w-16 h-16 text-amber-400 mx-auto mb-3" />
+                  <div className="text-4xl font-black text-amber-400 mb-2">ПОБЕДА</div>
+                  <div className="text-neutral-400 mb-5 text-sm">Дворец Харконнен разрушен!</div></>
+                ) : (
+                  <><Skull className="w-16 h-16 text-red-500 mx-auto mb-3" />
+                  <div className="text-4xl font-black text-red-500 mb-2">ПОРАЖЕНИЕ</div>
+                  <div className="text-neutral-400 mb-5 text-sm">Ваш дворец пал!</div></>
+                )}
+                <Button onClick={onExit} size="lg" className="bg-amber-600 hover:bg-amber-700 h-12 px-8 text-base">В меню</Button>
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </main>
 
-        {/* Right panel */}
-        <aside className="w-72 border-l border-neutral-800 bg-neutral-900/50 flex flex-col">
+        {/* Side panel — drawer on mobile, fixed on desktop */}
+        <aside className={`
+          ${panelOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}
+          fixed lg:static inset-y-0 right-0 top-[49px] lg:top-0
+          w-[85vw] max-w-[320px] lg:w-72
+          border-l border-neutral-800 bg-neutral-900/95 backdrop-blur
+          flex flex-col z-30 transition-transform duration-200
+          lg:translate-x-0
+        `}>
+          {/* Panel header with close button (mobile) */}
+          <div className="flex items-center justify-between px-2.5 py-1.5 border-b border-neutral-800 lg:hidden">
+            <span className="text-[11px] text-neutral-500 uppercase">Панель</span>
+            <button onClick={deselect} className="touch-manipulation text-neutral-400 hover:text-white text-lg leading-none px-2">✕</button>
+          </div>
           <ScrollArea className="flex-1">
-            <div className="p-3 space-y-4">
+            <div className="p-2.5 space-y-3">
               {/* Selection info */}
               <div>
-                <h3 className="text-xs font-semibold uppercase text-neutral-400 mb-2">Выбрано</h3>
+                <h3 className="text-[11px] font-semibold uppercase text-neutral-400 mb-1.5">Выбрано</h3>
                 {selUnit ? (
-                  <div className="p-3 rounded-lg bg-neutral-800/60 space-y-2">
+                  <div className="p-2.5 rounded-lg bg-neutral-800/60 space-y-1.5">
                     <div className="flex items-center gap-2">
-                      <div className="w-10 h-10 ring-1 ring-neutral-600 rounded overflow-hidden">
+                      <div className="w-11 h-11 ring-1 ring-neutral-600 rounded overflow-hidden shrink-0">
                         <img src={getUnitPreview(selUnit.type, 'atreides', 48)} alt="" className="w-full h-full"/>
                       </div>
-                      <div>
+                      <div className="min-w-0">
                         <div className="text-sm font-medium capitalize">{typeRu(selUnit.type)}</div>
                         <div className="text-xs text-neutral-400">HP {Math.ceil(selUnit.hp)}/{selUnit.maxHp}</div>
                       </div>
                     </div>
                     {selUnit.type === 'harvester' && <div className="text-xs text-orange-400">Спайс: {selUnit.cargo}/{selUnit.maxCargo}</div>}
                     <div className="text-xs text-neutral-400">Состояние: {stateRu(selUnit.state)}</div>
-                    <div className="text-[10px] text-neutral-500 pt-1">ПКМ — приказ двигаться/атаковать</div>
+                    <div className="text-[10px] text-neutral-500 pt-1">Тап по карте — приказ</div>
+                    {/* Delete unit button */}
+                    <Button size="sm" variant="destructive" className="w-full h-9 touch-manipulation"
+                      onClick={() => {
+                        const s = gameRef.current
+                        s.units = s.units.filter(u => u.id !== selUnit.id)
+                        setSelected(null)
+                        forceRender(n=>n+1)
+                      }}>
+                      <Trash2 className="w-3.5 h-3.5 mr-1.5"/> Уничтожить
+                    </Button>
                   </div>
                 ) : selBld ? (
-                  <div className="p-3 rounded-lg bg-neutral-800/60 space-y-2">
+                  <div className="p-2.5 rounded-lg bg-neutral-800/60 space-y-1.5">
                     <div className="flex items-center gap-2">
-                      <div className="w-10 h-10 ring-1 ring-neutral-600 rounded overflow-hidden">
-                        <img src={getBuildingPreview(selBld.type, 'atreides', 48, selBld.w, selBld.h)} alt="" className="w-full h-full"/>
+                      <div className="w-11 h-11 ring-1 ring-neutral-600 rounded overflow-hidden shrink-0">
+                        <img src={getBuildingPreview(selBld.type, 'atreides', 48, selBld.w, selBld.h, selBld.level || 1)} alt="" className="w-full h-full"/>
                       </div>
-                      <div>
+                      <div className="min-w-0">
                         <div className="text-sm font-medium">{typeRu(selBld.type)}</div>
                         <div className="text-xs text-neutral-400">HP {Math.ceil(selBld.hp)}/{selBld.maxHp}</div>
                       </div>
                     </div>
                     {selBld.hp < selBld.maxHp && <div className="text-xs text-amber-500">Строится... {Math.floor(selBld.hp/selBld.maxHp*100)}%</div>}
-                    {/* Production buttons */}
+                    {/* Production buttons — large touch targets */}
                     {selBld.type === 'palace' && (
-                      <Button size="sm" className="w-full bg-amber-600 hover:bg-amber-700" onClick={()=>handleProduce('harvester')}>
-                        <Hammer className="w-3 h-3 mr-1"/> Доставщик ({CONFIG.harvester.cost})
+                      <Button size="sm" className="w-full h-10 bg-amber-600 hover:bg-amber-700 touch-manipulation" onClick={()=>handleProduce('harvester')}>
+                        <Hammer className="w-4 h-4 mr-1.5"/> Доставщик ({CONFIG.harvester.cost})
                       </Button>
                     )}
                     {selBld.type === 'barracks' && (
-                      <Button size="sm" className="w-full bg-amber-600 hover:bg-amber-700" onClick={()=>handleProduce('soldier')}>
-                        <Sword className="w-3 h-3 mr-1"/> Солдат ({CONFIG.soldier.cost})
+                      <Button size="sm" className="w-full h-10 bg-amber-600 hover:bg-amber-700 touch-manipulation" onClick={()=>handleProduce('soldier')}>
+                        <Sword className="w-4 h-4 mr-1.5"/> Солдат ({CONFIG.soldier.cost})
                       </Button>
                     )}
                     {selBld.type === 'factory' && (
-                      <Button size="sm" className="w-full bg-amber-600 hover:bg-amber-700" onClick={()=>handleProduce('tank')}>
-                        <Sword className="w-3 h-3 mr-1"/> Танк ({CONFIG.tank.cost})
+                      <Button size="sm" className="w-full h-10 bg-amber-600 hover:bg-amber-700 touch-manipulation" onClick={()=>handleProduce('tank')}>
+                        <Sword className="w-4 h-4 mr-1.5"/> Танк ({CONFIG.tank.cost})
                       </Button>
                     )}
                     {selBld.queue.length > 0 && (
                       <div className="space-y-1">
-                        <div className="text-[10px] text-neutral-500 uppercase">Очередь (клик — отмена):</div>
+                        <div className="text-[10px] text-neutral-500 uppercase">Очередь (тап — отмена):</div>
                         {selBld.queue.map((q, i) => (
-                          <button key={i} onClick={() => { cancelQueueItem(s, selBld, i); forceRender(n=>n+1); toast.success(`Отменено: ${unitName(q.type)} (+${Math.floor(q.cost*0.75)}$)`) }}
-                            className="w-full flex items-center gap-1.5 p-1 rounded bg-neutral-700/60 hover:bg-red-900/60 text-left transition-colors group">
+                          <button key={i} onClick={() => { cancelQueueItem(s, selBld, i); forceRender(n=>n+1) }}
+                            className="w-full flex items-center gap-1.5 p-1.5 rounded bg-neutral-700/60 hover:bg-red-900/60 text-left transition-colors group touch-manipulation">
                             <img src={getUnitPreview(q.type, 'atreides', 20)} alt="" className="w-5 h-5"/>
                             <div className="flex-1">
                               <div className="text-[11px] text-neutral-200">{unitName(q.type)}</div>
@@ -928,34 +1230,82 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
                         ))}
                       </div>
                     )}
-                    {/* Research options */}
-                    {RESEARCH.filter(r => r.building === selBld.type).length > 0 && selBld.hp >= selBld.maxHp * 0.5 && (
+                    {/* TechLab: research technologies */}
+                    {selBld.type === 'techlab' && selBld.hp >= selBld.maxHp && (
                       <div className="space-y-1">
-                        <div className="text-[10px] text-cyan-400 uppercase">Исследования:</div>
+                        <div className="text-[10px] text-purple-400 uppercase">Технологии:</div>
                         {selBld.research ? (
+                          <div className="p-1.5 rounded bg-purple-900/30">
+                            <div className="text-[11px] text-purple-300">
+                              {selBld.research.type.startsWith('tech_') ? 'Технология: ' : 'Улучшение: '}
+                              {selBld.research.type.startsWith('tech_') ? TECHNOLOGIES.find(t => t.id === selBld.research!.type.substring(5))?.name : BUILDING_UPGRADES.find(u => u.id === selBld.research!.type.substring(4))?.name}
+                            </div>
+                            <div className="h-1.5 bg-neutral-900 rounded overflow-hidden mt-1">
+                              <div className="h-full bg-purple-500" style={{width: `${(selBld.research.progress/selBld.research.totalTime)*100}%`}}/>
+                            </div>
+                          </div>
+                        ) : (
+                          TECHNOLOGIES.map(tech => {
+                            const researched = isTechResearched(s, 'atreides', tech.id)
+                            const can = s.players.atreides.credits >= tech.cost && !researched
+                            return (
+                              <button key={tech.id} onClick={() => { if (startTechResearch(s, selBld, tech.id)) forceRender(n=>n+1) }}
+                                disabled={!can}
+                                className={`w-full text-left p-2 rounded text-[11px] transition-colors touch-manipulation ${researched ? 'bg-green-900/30 opacity-60' : can ? 'bg-neutral-700/60 hover:bg-purple-900/40' : 'bg-neutral-900 opacity-40'}`}>
+                                <div className="flex justify-between">
+                                  <span className={researched ? 'text-green-400' : 'text-neutral-200'}>{researched ? '✓ ' : ''}{tech.name}</span>
+                                  {!researched && <span className="text-purple-400 font-mono">{tech.cost}$</span>}
+                                </div>
+                                <div className="text-[9px] text-neutral-500">{tech.desc}</div>
+                              </button>
+                            )
+                          })
+                        )}
+                      </div>
+                    )}
+                    {/* Building upgrades (require tech researched first) */}
+                    {selBld.type !== 'techlab' && selBld.hp >= selBld.maxHp && (
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-cyan-400 uppercase">Улучшения:</div>
+                        {selBld.research && !selBld.research.type.startsWith('gen_upgrade') ? (
                           <div className="p-1.5 rounded bg-cyan-900/30">
-                            <div className="text-[11px] text-cyan-300">{RESEARCH.find(r => r.id === selBld.research!.type)?.name}</div>
+                            <div className="text-[11px] text-cyan-300">{BUILDING_UPGRADES.find(u => u.id === selBld.research!.type.substring(4))?.name}</div>
                             <div className="h-1.5 bg-neutral-900 rounded overflow-hidden mt-1">
                               <div className="h-full bg-cyan-500" style={{width: `${(selBld.research.progress/selBld.research.totalTime)*100}%`}}/>
                             </div>
-                            <button onClick={() => { cancelResearch(s, selBld); forceRender(n=>n+1); toast.success('Исследование отменено') }}
-                              className="text-[10px] text-red-400 hover:text-red-300 mt-0.5">Отменить</button>
                           </div>
                         ) : (
-                          RESEARCH.filter(r => r.building === selBld.type).map(r => (
-                            <button key={r.id} onClick={() => {
-                              if (startResearch(s, selBld, r.id)) { forceRender(n=>n+1); toast.success(`Исследование: ${r.name}`) }
-                              else toast.error('Недостаточно средств или энергии')
-                            }}
-                              disabled={s.players.atreides.credits < r.cost}
-                              className={`w-full text-left p-1.5 rounded text-[11px] transition-colors ${s.players.atreides.credits >= r.cost ? 'bg-neutral-700/60 hover:bg-cyan-900/40' : 'bg-neutral-900 opacity-40'}`}>
+                          BUILDING_UPGRADES.filter(u => {
+                            // Show upgrades for this building type that are unlocked but not yet applied
+                            const tech = TECHNOLOGIES.find(t => t.unlocks.some(un => un.upgradeId === u.id))
+                            if (!tech) return false
+                            const unlocked = isTechResearched(s, 'atreides', tech.id)
+                            if (!unlocked) return false
+                            // Check if applies to this building
+                            const unlockEntry = tech.unlocks.find(un => un.upgradeId === u.id)
+                            if (unlockEntry?.building !== selBld.type) return false
+                            // Check not already applied
+                            if (getUpgrade(s, 'atreides', u.id) > 1) return false
+                            return true
+                          }).map(u => (
+                            <button key={u.id} onClick={() => { if (startBuildingUpgrade(s, selBld, u.id)) forceRender(n=>n+1) }}
+                              disabled={s.players.atreides.credits < u.cost}
+                              className={`w-full text-left p-2 rounded text-[11px] transition-colors touch-manipulation ${s.players.atreides.credits >= u.cost ? 'bg-neutral-700/60 hover:bg-cyan-900/40' : 'bg-neutral-900 opacity-40'}`}>
                               <div className="flex justify-between">
-                                <span className="text-neutral-200">{r.name}</span>
-                                <span className="text-cyan-400 font-mono">{r.cost}$</span>
+                                <span className="text-neutral-200">{u.name}</span>
+                                <span className="text-cyan-400 font-mono">{u.cost}$</span>
                               </div>
-                              <div className="text-[9px] text-neutral-500">{r.desc}</div>
+                              <div className="text-[9px] text-neutral-500">{u.desc}</div>
                             </button>
                           ))
+                        )}
+                        {BUILDING_UPGRADES.filter(u => {
+                          const tech = TECHNOLOGIES.find(t => t.unlocks.some(un => un.upgradeId === u.id))
+                          if (!tech) return false
+                          const unlockEntry = tech.unlocks.find(un => un.upgradeId === u.id)
+                          return unlockEntry?.building === selBld.type && !isTechResearched(s, 'atreides', tech.id) && getUpgrade(s, 'atreides', u.id) <= 1
+                        }).length > 0 && (
+                          <div className="text-[9px] text-neutral-600 italic">🔒 Исследуйте технологии в Центре исследований</div>
                         )}
                       </div>
                     )}
@@ -964,64 +1314,110 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
                         <div className="text-xs text-cyan-400 flex items-center gap-1">
                           <Zap className="w-3 h-3"/> Производит: +{CONFIG.generator.energyOutput * selBld.level} энергии (ур. {selBld.level})
                         </div>
-                        {selBld.level < 3 && selBld.hp >= selBld.maxHp * 0.5 && (
-                          <Button size="sm" className="w-full bg-cyan-700 hover:bg-cyan-600"
+                        {selBld.level < 3 && selBld.hp >= selBld.maxHp && !selBld.research && (
+                          <Button size="sm" className="w-full h-9 bg-cyan-700 hover:bg-cyan-600 touch-manipulation"
                             disabled={s.players.atreides.credits < CONFIG.generator.upgradeCost * selBld.level}
                             onClick={() => {
-                              if (upgradeGenerator(s, selBld)) { forceRender(n=>n+1); toast.success(`Генератор: уровень ${selBld.level}`) }
-                              else toast.error('Недостаточно средств')
+                              if (upgradeGenerator(s, selBld)) { forceRender(n=>n+1) }
                             }}>
-                            <Zap className="w-3 h-3 mr-1"/> Улучшить до ур.{selBld.level + 1} ({CONFIG.generator.upgradeCost * selBld.level}$)
+                            <Zap className="w-3 h-3 mr-1"/> Улучшить → ур.{selBld.level + 1} ({CONFIG.generator.upgradeCost * selBld.level}$)
                           </Button>
+                        )}
+                        {selBld.research && (
+                          <div className="p-1.5 rounded bg-cyan-900/30">
+                            <div className="text-[11px] text-cyan-300">Улучшение до ур.{selBld.level + 1}...</div>
+                            <div className="h-1.5 bg-neutral-900 rounded overflow-hidden mt-1">
+                              <div className="h-full bg-cyan-500" style={{width: `${(selBld.research.progress/selBld.research.totalTime)*100}%`}}/>
+                            </div>
+                          </div>
                         )}
                       </>
                     )}
                     {selBld.type === 'radar' && (
                       <div className="text-xs text-green-400 space-y-0.5">
                         <div className="flex items-center gap-1"><Eye className="w-3 h-3"/> Радар: открывает туман войны</div>
-                        <div className="text-[10px] text-neutral-500">Радиус обзора: {CONFIG.radar.visionRange} тайлов</div>
+                        <div className="text-[10px] text-neutral-500">Радиус: {CONFIG.radar.visionRange} тайлов</div>
+                      </div>
+                    )}
+                    {selBld.type === 'techlab' && (
+                      <div className="text-xs text-purple-400 space-y-0.5">
+                        <div className="flex items-center gap-1">🔬 Центр исследований (ур.{selBld.level})</div>
+                        <div className="text-[10px] text-neutral-500">Исследования: генераторы, добыча, броня. Уровни открывают новые возможности.</div>
                       </div>
                     )}
                     {selBld.type === 'refinery' && (
                       <div className="text-xs text-orange-400 space-y-0.5">
                         <div>🏭 Переработка спайса → кредиты</div>
-                        <div className="text-[10px] text-neutral-500">Доставщики разгружаются ТОЛЬКО здесь. Постройте, чтобы получать доход со спайса.</div>
+                        <div className="text-[10px] text-neutral-500">Доставщики разгружаются ТОЛЬКО здесь.</div>
                       </div>
                     )}
                     {selBld.type === 'turret' && (
-                      <div className="text-xs text-neutral-400">Радиус: {(CONFIG.turret.range * getUpgrade(s, 'atreides', 'turretRange')).toFixed(1)} · Урон: {(CONFIG.turret.dmg * getUpgrade(s, 'atreides', 'turretDmg')).toFixed(0)}</div>
-                    )}
-                    {'energy' in CONFIG[selBld.type] && (CONFIG[selBld.type] as any).energy > 0 && (
-                      <div className="text-xs text-amber-500 flex items-center gap-1"><Zap className="w-3 h-3"/> Расход: {(CONFIG[selBld.type] as any).energy} энергии</div>
+                      <>
+                        {(() => {
+                          const tier = selBld.level || 1
+                          const tierName = tier === 3 ? 'Лазер' : tier === 2 ? 'Бронебойные пули' : 'Пулемёт'
+                          const tierColor = tier === 3 ? 'text-cyan-400' : tier === 2 ? 'text-orange-400' : 'text-yellow-400'
+                          const tierDmgMult = tier === 3 ? 2.5 : tier === 2 ? 1.5 : 1.0
+                          const tierRangeMult = tier === 3 ? 1.35 : tier === 2 ? 1.10 : 1.0
+                          const dmg = (CONFIG.turret.dmg * getUpgrade(s, 'atreides', 'turretDmg') * tierDmgMult)
+                          const range = (CONFIG.turret.range * getUpgrade(s, 'atreides', 'turretRange') * tierRangeMult)
+                          return (
+                            <div className="text-xs space-y-0.5">
+                              <div className="flex items-center gap-1">
+                                <span className="text-neutral-500">Уровень {tier}:</span>
+                                <span className={`font-medium ${tierColor}`}>{tierName}</span>
+                              </div>
+                              <div className="text-neutral-400">Радиус: {range.toFixed(1)} · Урон: {dmg.toFixed(0)}</div>
+                            </div>
+                          )
+                        })()}
+                        {selBld.level < 3 && selBld.hp >= selBld.maxHp && !selBld.research && (
+                          <Button size="sm" className="w-full h-9 bg-amber-700 hover:bg-amber-600 touch-manipulation"
+                            disabled={s.players.atreides.credits < CONFIG.turret.upgradeCost * selBld.level}
+                            onClick={() => {
+                              if (upgradeTurret(s, selBld)) { forceRender(n=>n+1) }
+                            }}>
+                            <ChevronUp className="w-3 h-3 mr-1"/> Улучшить → ур.{selBld.level + 1} ({CONFIG.turret.upgradeCost * selBld.level}$)
+                          </Button>
+                        )}
+                        {selBld.research && selBld.research.type.startsWith('turret_upgrade') && (
+                          <div className="p-1.5 rounded bg-amber-900/30">
+                            <div className="text-[11px] text-amber-300">Улучшение до ур.{selBld.level + 1}...</div>
+                            <div className="h-1.5 bg-neutral-900 rounded overflow-hidden mt-1">
+                              <div className="h-full bg-amber-500" style={{width: `${(selBld.research.progress/selBld.research.totalTime)*100}%`}}/>
+                            </div>
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                 ) : (
-                  <div className="p-3 rounded-lg bg-neutral-800/40 text-xs text-neutral-500 text-center">Ничего не выбрано</div>
+                  <div className="p-2.5 rounded-lg bg-neutral-800/40 text-xs text-neutral-500 text-center">Ничего не выбрано</div>
                 )}
               </div>
 
               <Separator className="bg-neutral-800" />
 
-              {/* Build menu */}
+              {/* Build menu — grid of large touch buttons on mobile */}
               <div>
-                <h3 className="text-xs font-semibold uppercase text-neutral-400 mb-2">Строительство</h3>
-                <div className="space-y-1.5">
+                <h3 className="text-[11px] font-semibold uppercase text-neutral-400 mb-1.5">Строительство</h3>
+                <div className="grid grid-cols-2 gap-1.5">
                   {([
                     ['generator', CONFIG.generator.cost], ['barracks', CONFIG.barracks.cost],
                     ['factory', CONFIG.factory.cost], ['turret', CONFIG.turret.cost],
                     ['refinery', CONFIG.refinery.cost], ['radar', CONFIG.radar.cost],
+                    ['techlab', CONFIG.techlab.cost],
                   ] as [BuildingType, number][]).map(([t, cost]) => {
                     const can = s.players.atreides.credits >= cost
+                    const active = buildMode === t
                     return (
                       <button key={t} onClick={()=>handleBuild(t)} disabled={!can}
-                        className={`w-full flex items-center gap-2 p-2 rounded-lg transition-all ${can?'bg-neutral-800 hover:bg-neutral-700':'bg-neutral-900 opacity-40'}`}>
-                        <div className="w-8 h-8 ring-1 ring-neutral-600 rounded overflow-hidden">
-                          <img src={getBuildingPreview(t, 'atreides', 40, FOOTPRINT[t].w, FOOTPRINT[t].h)} alt="" className="w-full h-full"/>
+                        className={`flex flex-col items-center gap-0.5 p-2 rounded-lg transition-all touch-manipulation ${active?'bg-amber-700 ring-2 ring-amber-400':can?'bg-neutral-800 hover:bg-neutral-700':'bg-neutral-900 opacity-40'}`}>
+                        <div className="w-9 h-9 ring-1 ring-neutral-600 rounded overflow-hidden">
+                          <img src={getBuildingPreview(t, 'atreides', 36, FOOTPRINT[t].w, FOOTPRINT[t].h)} alt="" className="w-full h-full"/>
                         </div>
-                        <div className="flex-1 text-left">
-                          <div className="text-sm">{typeRu(t)}</div>
-                        </div>
-                        <div className={`text-xs font-mono ${can?'text-amber-400':'text-red-400'}`}>{cost}</div>
+                        <div className="text-[10px] leading-tight text-center">{typeRu(t)}</div>
+                        <div className={`text-[10px] font-mono ${can?'text-amber-400':'text-red-400'}`}>{cost}</div>
                       </button>
                     )
                   })}
@@ -1032,8 +1428,8 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
 
               {/* Enemy info */}
               <div>
-                <h3 className="text-xs font-semibold uppercase text-neutral-400 mb-2">Враг: Харконнен</h3>
-                <div className="text-xs space-y-1 text-neutral-400">
+                <h3 className="text-[11px] font-semibold uppercase text-neutral-400 mb-1">Харконнен</h3>
+                <div className="text-[11px] space-y-0.5 text-neutral-400">
                   <div className="flex justify-between"><span>Кредиты:</span><span className="font-mono text-purple-400">{Math.floor(s.players.harkonnen.credits)}</span></div>
                   <div className="flex justify-between"><span>Юнитов:</span><span className="font-mono">{s.units.filter(u=>u.owner==='harkonnen').length}</span></div>
                   <div className="flex justify-between"><span>Зданий:</span><span className="font-mono">{s.buildings.filter(b=>b.owner==='harkonnen').length}</span></div>
@@ -1045,16 +1441,16 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
 
               {/* Event log */}
               <div>
-                <h3 className="text-xs font-semibold uppercase text-neutral-400 mb-2">События</h3>
-                <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
-                  {s.events.slice(-10).reverse().map((ev, i) => (
-                    <div key={i} className={`text-[11px] leading-tight ${
+                <h3 className="text-[11px] font-semibold uppercase text-neutral-400 mb-1">События</h3>
+                <div className="space-y-0.5 max-h-32 overflow-y-auto pr-1">
+                  {s.events.slice(-8).reverse().map((ev, i) => (
+                    <div key={i} className={`text-[10px] leading-tight ${
                       ev.type==='win'?'text-amber-400 font-bold':ev.type==='lose'?'text-red-400 font-bold':
                       ev.type==='warn'?'text-orange-400':ev.type==='death'?'text-red-300':
                       ev.type==='spice'?'text-green-400':ev.type==='build'?'text-blue-300':'text-neutral-400'
                     }`}>{ev.msg}</div>
                   ))}
-                  {s.events.length === 0 && <div className="text-[11px] text-neutral-600">Пока тихо...</div>}
+                  {s.events.length === 0 && <div className="text-[10px] text-neutral-600">Пока тихо...</div>}
                 </div>
               </div>
             </div>
@@ -1062,12 +1458,25 @@ function GameScreen({ difficulty, terrain, w, h, onExit }: {
         </aside>
       </div>
 
-      <footer className="border-t border-neutral-800 bg-neutral-900 px-4 py-1.5 text-[11px] text-neutral-500 flex gap-4">
-        <span><b className="text-emerald-400">ЛКМ</b> выбрать</span>
-        <span><b className="text-amber-400">ПКМ</b> приказ</span>
-        <span><b className="text-amber-400">Shift+ЛКМ</b> приказ</span>
-        <span><b className="text-neutral-300">Колесо</b> зум</span>
-        <span className="ml-auto">Зум: {Math.round(zoom*100)}% · Тик: {s.tick} · Сложность: {difficulty==='easy'?'лёгкая':difficulty==='medium'?'средняя':'тяжёлая'}</span>
+      {/* Bottom bar — shows latest event + controls hint */}
+      <footer className="border-t border-neutral-800 bg-neutral-900 px-2 py-1 flex items-center gap-2 shrink-0 overflow-hidden">
+        <button onClick={()=>setShowHelp(h=>!h)} className="touch-manipulation text-neutral-400 underline text-[10px] shrink-0">?</button>
+        {/* Latest event ticker */}
+        <div className="flex-1 min-w-0 text-[10px] truncate">
+          {s.events.length > 0 ? (
+            <span className={
+              s.events[s.events.length-1].type==='win'?'text-amber-400 font-bold':
+              s.events[s.events.length-1].type==='lose'?'text-red-400 font-bold':
+              s.events[s.events.length-1].type==='warn'?'text-orange-400':
+              s.events[s.events.length-1].type==='death'?'text-red-300':
+              s.events[s.events.length-1].type==='spice'?'text-green-400':
+              s.events[s.events.length-1].type==='build'?'text-blue-300':'text-neutral-400'
+            }>› {s.events[s.events.length-1].msg}</span>
+          ) : (
+            <span className="text-neutral-600">Тап — выбрать · Тап по карте — приказ · 2 пальца — зум · 1 палец drag — карта</span>
+          )}
+        </div>
+        <span className="text-[10px] text-neutral-500 shrink-0">{Math.round(zoom*100)}% · {s.tick}</span>
       </footer>
     </div>
   )

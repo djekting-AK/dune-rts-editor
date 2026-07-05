@@ -1,23 +1,15 @@
-// game-engine.ts — Full RTS game logic: units, combat, AI, economy, worm,
-//                  energy, fog of war, 1-unit-per-tile, projectiles/explosions
+// game-engine.ts — Full RTS game logic built on Entity class hierarchy
+// Types re-exported from entity.ts, game logic uses polymorphic dispatch
 
 import { Faction, BuildingType, UnitType } from './tile-renderer'
+import {
+  Building as BuildingClass, Unit as UnitClass,
+  createBuilding, createUnit,
+} from './entity'
+import { findPath, followPath, computePath, invalidatePathCache, getObstacleGrid } from './pathfinding'
 
-export interface Building {
-  id: number
-  type: BuildingType
-  x: number       // top-left tile
-  y: number
-  w: number       // footprint width (tiles)
-  h: number       // footprint height (tiles)
-  owner: Faction
-  hp: number
-  maxHp: number
-  cooldown: number
-  queue: { type: UnitType; progress: number; cost: number }[]
-  research?: ResearchState
-  level: number   // upgrade level (1 = base)
-}
+// Re-export entity types for page.tsx compatibility
+export type { Building, Unit } from './entity'
 
 export interface ResearchState {
   type: string
@@ -35,31 +27,6 @@ export interface ResearchDef {
   apply: (s: GameState, owner: Faction) => void
 }
 
-export interface Unit {
-  id: number
-  type: UnitType
-  x: number      // float grid coords
-  y: number
-  owner: Faction
-  hp: number
-  maxHp: number
-  state: 'idle' | 'move' | 'attack' | 'harvest' | 'return'
-  tx: number     // target tile
-  ty: number
-  targetUnitId: number | null
-  targetBldId: number | null
-  cargo: number      // spice carried
-  maxCargo: number
-  cooldown: number   // attack cooldown
-  harvestTime: number
-  homeX: number      // return point after combat (auto-attack origin)
-  homeY: number
-  stuckTicks: number // counter to detect being stuck
-  lastX: number
-  lastY: number
-  facing: number     // angle in radians (0 = right/east) for directional rendering
-}
-
 export interface Worm {
   id: number
   x: number
@@ -70,14 +37,14 @@ export interface Worm {
   hp: number
   maxHp: number
   cooldown: number
-  eaten: number  // count of units eaten this spawn (max 2)
+  eaten: number
 }
 
 export interface Projectile {
   id: number
   x: number; y: number
   tx: number; ty: number
-  sx: number; sy: number  // source
+  sx: number; sy: number
   speed: number
   dmg: number
   targetUnitId: number | null
@@ -86,6 +53,9 @@ export interface Projectile {
   owner: Faction
   color: string
   life: number
+  // Laser beam flag (L3 turret): when true, draw as a glowing line
+  // from (sx,sy) to (x,y) instead of a bullet dot.
+  beam?: boolean
 }
 
 export interface Explosion {
@@ -112,9 +82,9 @@ export interface GameEvent {
 export interface Player {
   faction: Faction
   credits: number
-  energy: number       // current energy supply
-  energyMax: number    // capacity from generators
-  energyDemand: number // consumption by buildings
+  energy: number
+  energyMax: number
+  energyDemand: number
   alive: boolean
   isAI: boolean
 }
@@ -123,16 +93,15 @@ export interface GameState {
   width: number
   height: number
   terrain: number[]
-  buildings: Building[]
-  units: Unit[]
+  buildings: BuildingClass[]
+  units: UnitClass[]
   worms: Worm[]
   projectiles: Projectile[]
   explosions: Explosion[]
   flashes: MuzzleFlash[]
   players: Record<Faction, Player>
-  // fog of war: per-player explored + visible (only atreides tracked for rendering)
-  explored: boolean[]      // ever seen by player
-  visible: boolean[]       // currently visible
+  explored: boolean[]
+  visible: boolean[]
   tick: number
   nextId: number
   events: GameEvent[]
@@ -144,15 +113,16 @@ export interface GameState {
 
 // ---------- Config ----------
 export const CONFIG = {
-  harvester: { cost: 150, hp: 200, speed: 0.08, maxCargo: 60, buildTime: 120, dmg: 0, range: 0, atkCd: 0, energy: 2 },
+  harvester: { cost: 150, hp: 200, speed: 0.15, maxCargo: 60, buildTime: 120, dmg: 0, range: 0, atkCd: 0, energy: 2 },
   soldier:   { cost: 60,  hp: 70,  speed: 0.12,  maxCargo: 0,  buildTime: 60,  dmg: 9,  range: 1.8, atkCd: 28, energy: 1 },
   tank:      { cost: 200, hp: 160, speed: 0.09,  maxCargo: 0,  buildTime: 100, dmg: 22, range: 2.8, atkCd: 40, energy: 3 },
   barracks:  { cost: 150, hp: 400, buildTime: 200, energy: 3, w: 2, h: 2 },
   factory:   { cost: 300, hp: 550, buildTime: 300, energy: 5, w: 3, h: 2 },
-  turret:    { cost: 100, hp: 280, buildTime: 120, dmg: 16, range: 4.5, atkCd: 32, energy: 2, w: 1, h: 1 },
+  turret:    { cost: 100, hp: 280, buildTime: 120, dmg: 16, range: 4.5, atkCd: 32, energy: 2, w: 1, h: 1, upgradeCost: 120 },
   refinery:  { cost: 200, hp: 450, buildTime: 180, energy: 2, w: 2, h: 2 },
   generator: { cost: 120, hp: 300, buildTime: 100, energy: 0, energyOutput: 12, w: 2, h: 2, upgradeCost: 100, upgradeOutput: 12 },
   radar:     { cost: 180, hp: 250, buildTime: 140, energy: 3, w: 2, h: 2, visionRange: 12 },
+  techlab:   { cost: 250, hp: 350, buildTime: 200, energy: 4, w: 2, h: 2, upgradeCost: 150 },
   palace:    { cost: 0,   hp: 1500, buildTime: 0, energy: 0, w: 2, h: 2 },
   spiceValue: { 5: 1, 6: 2 },
   wormInterval: 3500,
@@ -173,36 +143,134 @@ export const FOOTPRINT: Record<string, { w: number; h: number }> = {
   refinery:  { w: 2, h: 2 },
   generator: { w: 2, h: 2 },
   radar:     { w: 2, h: 2 },
+  techlab:   { w: 2, h: 2 },
 }
 
-// ---------- Research definitions ----------
-export const RESEARCH: ResearchDef[] = [
+// ============================================================
+//  TWO-LEVEL RESEARCH SYSTEM
+//  Level 1: TechLab researches TECHNOLOGIES (unlocks)
+//  Level 2: Buildings/units APPLY unlocked tech (upgrade for $ + time)
+// ============================================================
+
+// --- Technologies (researched at TechLab) ---
+export interface TechDef {
+  id: string
+  name: string
+  cost: number
+  time: number
+  desc: string
+  // Which building upgrades this tech unlocks
+  unlocks: { building: BuildingType; upgradeId: string; name: string; cost: number; time: number; desc: string }[]
+}
+
+export const TECHNOLOGIES: TechDef[] = [
   {
-    id: 'turret_dmg', name: 'Усиление турелей +50% урон', cost: 200, time: 150, building: 'turret',
-    desc: 'Увеличивает урон всех турелей на 50%',
-    apply: (s, owner) => { (s as any)._upgrades = (s as any)._upgrades || {}; (s as any)._upgrades[owner] = (s as any)._upgrades[owner] || {}; (s as any)._upgrades[owner].turretDmg = 1.5; logEvent(s, 'build', 'Исследование: турели усилены') },
+    id: 'tech_weapons', name: 'Оружейные технологии', cost: 300, time: 200,
+    desc: 'Открывает улучшения урона для турелей и танков',
+    unlocks: [
+      { building: 'turret', upgradeId: 'turret_dmg', name: 'Усиление турелей +50% урон', cost: 200, time: 150, desc: '+50% урон' },
+      { building: 'factory', upgradeId: 'tank_dmg', name: 'Усиление танков +50% урон', cost: 280, time: 200, desc: '+50% урон танков' },
+    ],
   },
   {
-    id: 'turret_range', name: 'Дальнобойность турелей +30%', cost: 250, time: 180, building: 'turret',
-    desc: 'Увеличивает радиус атаки турелей на 30%',
-    apply: (s, owner) => { (s as any)._upgrades = (s as any)._upgrades || {}; (s as any)._upgrades[owner] = (s as any)._upgrades[owner] || {}; (s as any)._upgrades[owner].turretRange = 1.3; logEvent(s, 'build', 'Исследование: турели дальнобойнее') },
+    id: 'tech_propulsion', name: 'Двигательные системы', cost: 250, time: 180,
+    desc: 'Открывает улучшение скорости юнитов и дальности турелей',
+    unlocks: [
+      { building: 'barracks', upgradeId: 'unit_speed', name: 'Скорость юнитов +40%', cost: 220, time: 160, desc: '+40% скорость' },
+      { building: 'turret', upgradeId: 'turret_range', name: 'Дальнобойность турелей +30%', cost: 250, time: 180, desc: '+30% радиус' },
+    ],
   },
   {
-    id: 'unit_speed', name: 'Скорость юнитов +40%', cost: 220, time: 160, building: 'barracks',
-    desc: 'Увеличивает скорость передвижения всех юнитов на 40%',
-    apply: (s, owner) => { (s as any)._upgrades = (s as any)._upgrades || {}; (s as any)._upgrades[owner] = (s as any)._upgrades[owner] || {}; (s as any)._upgrades[owner].unitSpeed = 1.4; logEvent(s, 'build', 'Исследование: юниты быстрее') },
+    id: 'tech_armor', name: 'Броневые технологии', cost: 280, time: 200,
+    desc: 'Открывает улучшение прочности юнитов и зданий',
+    unlocks: [
+      { building: 'barracks', upgradeId: 'unit_hp', name: 'Прочность юнитов +30%', cost: 200, time: 150, desc: '+30% HP юнитов' },
+      { building: 'techlab', upgradeId: 'armor_all', name: 'Броня всех зданий +30%', cost: 350, time: 250, desc: '+30% HP зданий' },
+    ],
   },
   {
-    id: 'unit_hp', name: 'Прочность юнитов +30%', cost: 200, time: 150, building: 'barracks',
-    desc: 'Увеличивает HP всех юнитов на 30%',
-    apply: (s, owner) => { (s as any)._upgrades = (s as any)._upgrades || {}; (s as any)._upgrades[owner] = (s as any)._upgrades[owner] || {}; (s as any)._upgrades[owner].unitHp = 1.3; logEvent(s, 'build', 'Исследование: юниты прочнее') },
-  },
-  {
-    id: 'tank_dmg', name: 'Усиление танков +50% урон', cost: 280, time: 200, building: 'factory',
-    desc: 'Увеличивает урон танков на 50%',
-    apply: (s, owner) => { (s as any)._upgrades = (s as any)._upgrades || {}; (s as any)._upgrades[owner] = (s as any)._upgrades[owner] || {}; (s as any)._upgrades[owner].tankDmg = 1.5; logEvent(s, 'build', 'Исследование: танки усилены') },
+    id: 'tech_energy', name: 'Энергетические системы', cost: 250, time: 180,
+    desc: 'Открывает улучшение генераторов и скорости добычи',
+    unlocks: [
+      { building: 'techlab', upgradeId: 'gen_output', name: 'Эффективность генераторов +50%', cost: 250, time: 180, desc: '+50% энергия' },
+      { building: 'techlab', upgradeId: 'harvest_speed', name: 'Скорость добычи спайса x2', cost: 300, time: 200, desc: 'x2 добыча' },
+    ],
   },
 ]
+
+// --- Building-level upgrades (applied after tech is researched) ---
+export interface BuildingUpgrade {
+  id: string
+  name: string
+  cost: number
+  time: number
+  desc: string
+  requiredTech: string  // tech id that must be researched first
+  apply: (s: GameState, owner: Faction) => void
+}
+
+export const BUILDING_UPGRADES: BuildingUpgrade[] = [
+  { id: 'turret_dmg', name: 'Усиление турелей +50% урон', cost: 200, time: 150, desc: '+50% урон', requiredTech: 'tech_weapons',
+    apply: (s, owner) => setUpgrade(s, owner, 'turretDmg', 1.5) },
+  { id: 'tank_dmg', name: 'Усиление танков +50% урон', cost: 280, time: 200, desc: '+50% урон танков', requiredTech: 'tech_weapons',
+    apply: (s, owner) => setUpgrade(s, owner, 'tankDmg', 1.5) },
+  { id: 'unit_speed', name: 'Скорость юнитов +40%', cost: 220, time: 160, desc: '+40% скорость', requiredTech: 'tech_propulsion',
+    apply: (s, owner) => setUpgrade(s, owner, 'unitSpeed', 1.4) },
+  { id: 'turret_range', name: 'Дальнобойность турелей +30%', cost: 250, time: 180, desc: '+30% радиус', requiredTech: 'tech_propulsion',
+    apply: (s, owner) => setUpgrade(s, owner, 'turretRange', 1.3) },
+  { id: 'unit_hp', name: 'Прочность юнитов +30%', cost: 200, time: 150, desc: '+30% HP юнитов', requiredTech: 'tech_armor',
+    apply: (s, owner) => setUpgrade(s, owner, 'unitHp', 1.3) },
+  { id: 'armor_all', name: 'Броня всех зданий +30%', cost: 350, time: 250, desc: '+30% HP зданий', requiredTech: 'tech_armor',
+    apply: (s, owner) => setUpgrade(s, owner, 'armorBld', 1.3) },
+  { id: 'gen_output', name: 'Эффективность генераторов +50%', cost: 250, time: 180, desc: '+50% энергия', requiredTech: 'tech_energy',
+    apply: (s, owner) => { setUpgrade(s, owner, 'genOutput', 1.5); recomputeEnergy(s) } },
+  { id: 'harvest_speed', name: 'Скорость добычи спайса x2', cost: 300, time: 200, desc: 'x2 добыча', requiredTech: 'tech_energy',
+    apply: (s, owner) => setUpgrade(s, owner, 'harvestSpeed', 2.0) },
+]
+
+// Keep old RESEARCH for backward compat (page.tsx imports)
+export const RESEARCH = BUILDING_UPGRADES
+
+// --- Tech state helpers ---
+export function isTechResearched(s: GameState, owner: Faction, techId: string): boolean {
+  return !!((s as any)._techs?.[owner]?.[techId])
+}
+
+export function startTechResearch(s: GameState, bld: Building, techId: string): boolean {
+  const def = TECHNOLOGIES.find(t => t.id === techId)
+  if (!def) return false
+  if (bld.type !== 'techlab') return false
+  if (bld.research) return false
+  if (bld.hp < bld.maxHp) return false
+  if (!hasPower(s, bld.owner)) return false
+  if (isTechResearched(s, bld.owner, techId)) return false
+  if (s.players[bld.owner].credits < def.cost) return false
+  s.players[bld.owner].credits -= def.cost
+  bld.research = { type: 'tech_' + techId, progress: 0, totalTime: def.time }
+  return true
+}
+
+export function startBuildingUpgrade(s: GameState, bld: Building, upgradeId: string): boolean {
+  const def = BUILDING_UPGRADES.find(u => u.id === upgradeId)
+  if (!def) return false
+  if (bld.research) return false
+  if (bld.hp < bld.maxHp) return false
+  if (!hasPower(s, bld.owner)) return false
+  if (!isTechResearched(s, bld.owner, def.requiredTech)) return false
+  // Check not already applied
+  if (getUpgrade(s, bld.owner, upgradeId) > 1) return false
+  if (s.players[bld.owner].credits < def.cost) return false
+  s.players[bld.owner].credits -= def.cost
+  bld.research = { type: 'upg_' + upgradeId, progress: 0, totalTime: def.time }
+  return true
+}
+
+function setUpgrade(s: GameState, owner: Faction, key: string, val: number) {
+  (s as any)._upgrades = (s as any)._upgrades || {}
+  ;(s as any)._upgrades[owner] = (s as any)._upgrades[owner] || {}
+  ;(s as any)._upgrades[owner][key] = val
+  logEvent(s, 'build', 'Улучшение применено: ' + (BUILDING_UPGRADES.find(u => u.id === key)?.name || key))
+}
 
 export function getUpgrade(s: GameState, owner: Faction, key: string): number {
   return ((s as any)._upgrades?.[owner]?.[key]) || 1
@@ -212,6 +280,7 @@ export function startResearch(s: GameState, bld: Building, researchId: string): 
   const def = RESEARCH.find(r => r.id === researchId)
   if (!def || bld.type !== def.building) return false
   if (bld.research) return false
+  if (bld.hp < bld.maxHp) return false  // must be fully built
   if (s.players[bld.owner].credits < def.cost) return false
   if (!hasPower(s, bld.owner)) return false
   s.players[bld.owner].credits -= def.cost
@@ -234,21 +303,38 @@ export const BUILD_COSTS: Record<string, number> = {
   refinery: CONFIG.refinery.cost,
   generator: CONFIG.generator.cost,
   radar: CONFIG.radar.cost,
+  techlab: CONFIG.techlab.cost,
 }
 
-// ---------- Generator upgrade ----------
+// ---------- Generator upgrade (now via research, not instant) ----------
 export function upgradeGenerator(s: GameState, bld: Building): boolean {
   if (bld.type !== 'generator') return false
   if (bld.level >= 3) return false
   const cost = CONFIG.generator.upgradeCost * bld.level
   if (s.players[bld.owner].credits < cost) return false
-  if (bld.hp < bld.maxHp * 0.5) return false
+  if (bld.hp < bld.maxHp) return false
+  if (!hasPower(s, bld.owner)) return false
+  // Start research instead of instant upgrade
+  if (bld.research) return false  // already researching
   s.players[bld.owner].credits -= cost
-  bld.level++
-  bld.maxHp += 100
-  bld.hp = bld.maxHp
-  recomputeEnergy(s)
-  logEvent(s, 'build', `Генератор улучшен до уровня ${bld.level}`)
+  bld.research = { type: 'gen_upgrade_' + bld.level, progress: 0, totalTime: 100 }
+  return true
+}
+
+// ---------- Turret upgrade (3-tier: machine gun -> armor-piercing -> laser) ----------
+// L1: yellow bullet, base dmg/range.
+// L2: orange bullet, +50% dmg, +10% range, slower cooldown.
+// L3: cyan laser beam, +150% dmg, +35% range, slowest cooldown but devastating.
+export function upgradeTurret(s: GameState, bld: Building): boolean {
+  if (bld.type !== 'turret') return false
+  if (bld.level >= 3) return false
+  const cost = CONFIG.turret.upgradeCost * bld.level
+  if (s.players[bld.owner].credits < cost) return false
+  if (bld.hp < bld.maxHp) return false
+  if (!hasPower(s, bld.owner)) return false
+  if (bld.research) return false  // already researching
+  s.players[bld.owner].credits -= cost
+  bld.research = { type: 'turret_upgrade_' + bld.level, progress: 0, totalTime: 100 }
   return true
 }
 
@@ -322,11 +408,23 @@ export function createGame(width: number, height: number, terrain: number[], dif
   const px2 = width - 5, py2 = Math.floor(height / 2) - 1
   for (const [bx, by, fac] of [[px1, py1, 'atreides'], [px2, py2, 'harkonnen']] as const) {
     const fp = FOOTPRINT.palace
-    // clear footprint to rock platform
+    // clear footprint to SAND (walkable) — building blocks via tileHasBuilding, not terrain
     for (let dy = 0; dy < fp.h; dy++) for (let dx = 0; dx < fp.w; dx++) {
-      if (inBounds(bx + dx, by + dy, width, height)) terrain[idx(bx + dx, by + dy, width)] = 3
+      if (inBounds(bx + dx, by + dy, width, height)) terrain[idx(bx + dx, by + dy, width)] = 1
     }
-    s.buildings.push({ id: s.nextId++, type: 'palace', x: bx, y: by, w: fp.w, h: fp.h, owner: fac, hp: CONFIG.palace.hp, maxHp: CONFIG.palace.hp, cooldown: 0, queue: [], level: 1 })
+    const palace = createBuilding('palace', s.nextId++, bx, by, fac)
+    palace.hp = palace.maxHp  // fully built at start
+    s.buildings.push(palace)
+    // start with a refinery (so harvester can unload immediately)
+    const refX = bx + fp.w + 1
+    const refY = by
+    const refFp = FOOTPRINT.refinery
+    for (let dy = 0; dy < refFp.h; dy++) for (let dx = 0; dx < refFp.w; dx++) {
+      if (inBounds(refX + dx, refY + dy, width, height)) terrain[idx(refX + dx, refY + dy, width)] = 1
+    }
+    const refinery = createBuilding('refinery', s.nextId++, refX, refY, fac)
+    refinery.hp = refinery.maxHp  // fully built
+    s.buildings.push(refinery)
     // start harvester below palace
     s.units.push(makeUnit(s, 'harvester', fac, bx + fp.w / 2, by + fp.h + 0.5))
   }
@@ -335,18 +433,8 @@ export function createGame(width: number, height: number, terrain: number[], dif
 }
 
 export function makeUnit(s: GameState, type: UnitType, owner: Faction, x: number, y: number): Unit {
-  const c = CONFIG[type]
-  return {
-    id: s.nextId++, type, x, y, owner,
-    hp: c.hp, maxHp: c.hp,
-    state: 'idle', tx: Math.round(x), ty: Math.round(y),
-    targetUnitId: null, targetBldId: null,
-    cargo: 0, maxCargo: c.maxCargo,
-    cooldown: 0, harvestTime: 0,
-    homeX: x, homeY: y,
-    stuckTicks: 0, lastX: x, lastY: y,
-    facing: 0,
-  }
+  const u = createUnit(type, s.nextId++, x, y, owner)
+  return u
 }
 
 // ---------- Energy ----------
@@ -356,9 +444,11 @@ export function recomputeEnergy(s: GameState) {
     let max = 0, demand = 0
     for (const b of s.buildings) {
       if (b.owner !== f) continue
-      if (b.type === 'generator') max += CONFIG.generator.energyOutput * (b.level || 1)
-      else if (b.type === 'palace') max += 6
-      else demand += (CONFIG[b.type] as any).energy || 0
+      if (b.hp < b.maxHp) continue  // not built yet — no energy contribution/consumption
+      const bt = b.type  // cache getter
+      if (bt === 'generator') max += CONFIG.generator.energyOutput * (b.level || 1)
+      else if (bt === 'palace') max += 6
+      else demand += (CONFIG[bt] as any).energy || 0
     }
     for (const u of s.units) {
       if (u.owner !== f) continue
@@ -381,15 +471,26 @@ export function logEvent(s: GameState, type: GameEvent['type'], msg: string) {
 }
 
 // ---------- Visual effects ----------
-function spawnProjectile(s: GameState, sx: number, sy: number, tx: number, ty: number, dmg: number, owner: Faction, color: string, target: {unitId?:number, bldId?:number, wormId?:number}) {
+function spawnProjectile(
+  s: GameState, sx: number, sy: number, tx: number, ty: number,
+  dmg: number, owner: Faction, color: string,
+  target: {unitId?:number, bldId?:number, wormId?:number},
+  opts?: { beam?: boolean, speed?: number, life?: number, flash?: boolean },
+) {
+  const beam = opts?.beam ?? false
+  const speed = opts?.speed ?? 0.35
+  const life = opts?.life ?? 60
   s.projectiles.push({
     id: s.nextId++, x: sx, y: sy, sx, sy, tx, ty,
-    speed: 0.35, dmg, owner, color, life: 60,
+    speed, dmg, owner, color, life, beam,
     targetUnitId: target.unitId ?? null,
     targetBldId: target.bldId ?? null,
     targetWormId: target.wormId ?? null,
   })
-  s.flashes.push({ id: s.nextId++, x: sx, y: sy, frame: 0 })
+  // Beams handle their own visuals (no separate muzzle flash).
+  if (opts?.flash !== false && !beam) {
+    s.flashes.push({ id: s.nextId++, x: sx, y: sy, frame: 0 })
+  }
 }
 
 function spawnExplosion(s: GameState, x: number, y: number, size = 1, color = '#ff8030') {
@@ -422,14 +523,10 @@ export function placeBuilding(s: GameState, owner: Faction, type: BuildingType, 
   const fp = FOOTPRINT[type]
   const cost = BUILD_COSTS[type] ?? 0
   s.players[owner].credits -= cost
-  const cfg = CONFIG[type] as any
-  s.buildings.push({
-    id: s.nextId++, type, x, y, w: fp.w, h: fp.h, owner,
-    hp: cfg.hp * 0.5, maxHp: cfg.hp,
-    cooldown: 0, queue: [],
-    level: 1,
-  })
+  const b = createBuilding(type, s.nextId++, x, y, owner)
+  s.buildings.push(b)
   recomputeEnergy(s)
+  invalidatePathCache()  // building changes obstacle grid
   logEvent(s, 'build', `${owner === 'atreides' ? 'Вы строите' : 'ИИ строит'}: ${typeRu(type)}`)
   return true
 }
@@ -437,7 +534,7 @@ export function placeBuilding(s: GameState, owner: Faction, type: BuildingType, 
 export function queueUnit(s: GameState, bld: Building, type: UnitType): boolean {
   const cost = CONFIG[type].cost
   if (s.players[bld.owner].credits < cost) return false
-  if (bld.hp < bld.maxHp * 0.5) return false
+  if (bld.hp < bld.maxHp) return false  // must be fully built
   // check power
   if (!hasPower(s, bld.owner)) return false
   s.players[bld.owner].credits -= cost
@@ -447,23 +544,11 @@ export function queueUnit(s: GameState, bld: Building, type: UnitType): boolean 
 
 // ---------- Unit commands ----------
 export function commandMove(s: GameState, unit: Unit, tx: number, ty: number) {
-  let fx = tx, fy = ty
-  if (!isWalkable(s.terrain, Math.round(tx), Math.round(ty), s.width, s.height)) {
-    let found = false
-    for (let r = 1; r <= 6 && !found; r++) {
-      for (let dy = -r; dy <= r && !found; dy++) {
-        for (let dx = -r; dx <= r && !found; dx++) {
-          const cx = Math.round(tx) + dx, cy = Math.round(ty) + dy
-          if (isWalkable(s.terrain, cx, cy, s.width, s.height) && !unitAt(s, cx, cy)) {
-            fx = cx + 0.5; fy = cy + 0.5; found = true
-          }
-        }
-      }
-    }
-  }
-  unit.tx = fx; unit.ty = fy
+  unit.tx = tx; unit.ty = ty
   unit.targetUnitId = null; unit.targetBldId = null
   unit.state = 'move'
+  // Compute A* path once (cached on unit)
+  computePath(s, unit)
 }
 
 export function commandAttack(s: GameState, unit: Unit, targetId: number, isBuilding: boolean) {
@@ -473,7 +558,7 @@ export function commandAttack(s: GameState, unit: Unit, targetId: number, isBuil
 }
 
 // ---------- Picking ----------
-export function pickUnitAt(s: GameState, x: number, y: number, owner?: Faction, radius = 0.9): Unit | null {
+export function pickUnitAt(s: GameState, x: number, y: number, owner?: Faction, radius = 1.5): Unit | null {
   let best: Unit | null = null
   let bestD = radius
   for (const u of s.units) {
@@ -508,6 +593,7 @@ export function tick(s: GameState) {
   updateEffects(s)
   updateWorms(s)
   updateFog(s)
+  recomputeEnergy(s)  // recalculate energy every tick (buildings may complete)
   if (s.players.harkonnen.alive) updateAI(s)
   // win/lose
   const aPalace = s.buildings.find(b => b.owner === 'atreides' && b.type === 'palace')
@@ -524,17 +610,50 @@ export function tick(s: GameState) {
 
 function updateBuildings(s: GameState) {
   for (const b of s.buildings) {
-    if (b.hp < b.maxHp) b.hp = Math.min(b.maxHp, b.hp + 2)
-    // research processing
+    // construction progress — building not functional until fully built
+    const isBuilt = b.hp >= b.maxHp
+    if (!isBuilt) {
+      b.hp = Math.min(b.maxHp, b.hp + 2)
+      continue  // under construction — no functions yet
+    }
+    // research processing (only after built)
     if (b.research) {
       b.research.progress++
       if (b.research.progress >= b.research.totalTime) {
-        const def = RESEARCH.find(r => r.id === b.research!.type)
-        if (def) def.apply(s, b.owner)
+        const rt = b.research.type
+        if (rt.startsWith('tech_')) {
+          // Technology research complete
+          const techId = rt.substring(5)
+          ;(s as any)._techs = (s as any)._techs || {}
+          ;(s as any)._techs[b.owner] = (s as any)._techs[b.owner] || {}
+          ;(s as any)._techs[b.owner][techId] = true
+          const def = TECHNOLOGIES.find(t => t.id === techId)
+          logEvent(s, 'build', 'Технология исследована: ' + (def?.name || techId))
+        } else if (rt.startsWith('upg_')) {
+          // Building upgrade complete
+          const upgId = rt.substring(4)
+          const def = BUILDING_UPGRADES.find(u => u.id === upgId)
+          if (def) def.apply(s, b.owner)
+        } else if (rt.startsWith('gen_upgrade_')) {
+          // Generator level upgrade complete
+          b.level++
+          b.maxHp += 100
+          b.hp = b.maxHp
+          recomputeEnergy(s)
+          logEvent(s, 'build', `Генератор улучшен до ур.${b.level}`)
+        } else if (rt.startsWith('turret_upgrade_')) {
+          // Turret tier upgrade complete (L1 machine gun -> L2 armor-piercing -> L3 laser)
+          b.level++
+          b.maxHp += 80
+          b.hp = b.maxHp
+          const tierName = b.level === 3 ? 'лазер' : b.level === 2 ? 'бронебойные пули' : 'пулемёт'
+          logEvent(s, 'build', `Турель улучшена до ур.${b.level} (${tierName})`)
+        }
         b.research = undefined
       }
     }
-    if (b.queue.length > 0 && b.hp >= b.maxHp * 0.5) {
+    // production (only after built)
+    if (b.queue.length > 0) {
       const q = b.queue[0]
       q.progress++
       const cfg = CONFIG[q.type]
@@ -550,25 +669,38 @@ function updateBuildings(s: GameState) {
         }
       }
     }
-    // turret auto-attack (only if has power) — use building center
-    if (b.type === 'turret' && b.hp >= b.maxHp * 0.5 && hasPower(s, b.owner)) {
+    // turret auto-attack (only after built + has power)
+    if (b.type === 'turret' && isBuilt && hasPower(s, b.owner)) {
       const cx = b.x + b.w / 2, cy = b.y + b.h / 2
-      const tRange = CONFIG.turret.range * getUpgrade(s, b.owner, 'turretRange')
-      const tDmg = CONFIG.turret.dmg * getUpgrade(s, b.owner, 'turretDmg')
+      // Tier-based damage / range / cooldown scaling (L1 base, L2 +50% dmg, L3 +150% dmg + longer range)
+      const tier = b.level || 1
+      const tierDmgMult   = tier === 3 ? 2.5 : tier === 2 ? 1.5 : 1.0
+      const tierRangeMult = tier === 3 ? 1.35 : tier === 2 ? 1.10 : 1.0
+      const tierCdMult    = tier === 3 ? 1.40 : tier === 2 ? 1.15 : 1.0
+      const tRange = CONFIG.turret.range * getUpgrade(s, b.owner, 'turretRange') * tierRangeMult
+      const tDmg = CONFIG.turret.dmg * getUpgrade(s, b.owner, 'turretDmg') * tierDmgMult
+      // Tier-based projectile color + laser beam flag for L3
+      //   L1: yellow #ffe060 (machine gun bullet)
+      //   L2: orange #ff8030 (armor-piercing bullet, bigger muzzle flash)
+      //   L3: cyan   #00ffff (laser beam — drawn as a line, not a dot)
+      const tierColor = tier === 3 ? '#00ffff' : tier === 2 ? '#ff8030' : '#ffe060'
+      const tierOpts = tier === 3 ? { beam: true, speed: 2.5, life: 5 } : {}
       b.cooldown = Math.max(0, b.cooldown - 1)
       if (b.cooldown === 0) {
         const target = findNearestEnemy(s, cx, cy, b.owner, tRange)
         if (target) {
           const tx = 'type' in target ? (target as any).x : (target as Building).x + (target as Building).w / 2
           const ty = 'type' in target ? (target as any).y : (target as Building).y + (target as Building).h / 2
-          if ('cargo' in target) spawnProjectile(s, cx, cy, tx, ty, tDmg, b.owner, '#ffe060', { unitId: (target as Unit).id })
-          else spawnProjectile(s, cx, cy, tx, ty, tDmg, b.owner, '#ffe060', { bldId: (target as Building).id })
-          b.cooldown = CONFIG.turret.atkCd
+          if ('cargo' in target) spawnProjectile(s, cx, cy, tx, ty, tDmg, b.owner, tierColor, { unitId: (target as Unit).id }, tierOpts)
+          else spawnProjectile(s, cx, cy, tx, ty, tDmg, b.owner, tierColor, { bldId: (target as Building).id }, tierOpts)
+          b.cooldown = Math.floor(CONFIG.turret.atkCd * tierCdMult)
         }
       }
     }
   }
+  const bldCountBefore = s.buildings.length
   s.buildings = s.buildings.filter(b => b.hp > 0)
+  if (s.buildings.length !== bldCountBefore) invalidatePathCache()  // building destroyed
 }
 
 function findSpawnTile(s: GameState, b: Building): { x: number; y: number } | null {
@@ -593,21 +725,24 @@ function findSpawnTile(s: GameState, b: Building): { x: number; y: number } | nu
       queue.push(y * w + x)
     }
   }
-  // BFS up to depth 80
-  const dirs = [[1,0],[-1,0],[0,1],[0,-1]]
+  // BFS up to depth 80 (Int32Array + index pointer for O(1) dequeue)
+  const dirs = [1, 0, -1, 0, 0, 1, 0, -1]
+  const bQ = new Int32Array(w * h)
+  let bHead = 0, bTail = queue.length
+  for (let i = 0; i < queue.length; i++) bQ[i] = queue[i]
   let depth = 0
-  while (queue.length && depth < 80) {
-    const cur = queue.shift()!
+  while (bHead < bTail && depth < 80) {
+    const cur = bQ[bHead++]
     depth++
-    const cx = cur % w, cy = Math.floor(cur / w)
-    for (const [dx, dy] of dirs) {
-      const nx = cx + dx, ny = cy + dy
+    const cx = cur % w, cy = (cur - cx) / w
+    for (let d = 0; d < 8; d += 2) {
+      const nx = cx + dirs[d], ny = cy + dirs[d + 1]
       if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
       const ni = ny * w + nx
       if (visited[ni]) continue
       if (isTileFree(s, nx, ny, -1)) return { x: nx + 0.5, y: ny + 0.5 }
       visited[ni] = 1
-      queue.push(ni)
+      bQ[bTail++] = ni
     }
   }
   return null
@@ -634,26 +769,34 @@ function findNearestEnemy(s: GameState, x: number, y: number, owner: Faction, ra
   return best
 }
 
-function findNearestSpice(s: GameState, x: number, y: number, range = 30, exceptUnitId?: number): { x: number; y: number } | null {
+function findNearestSpice(s: GameState, x: number, y: number, range = 48, exceptUnitId?: number): { x: number; y: number } | null {
   let best: { x: number; y: number } | null = null
   let bestD = range
-  for (let r = 1; r <= range; r += 2) {
-    for (let dy = -r; dy <= r; dy += 2) {
-      for (let dx = -r; dx <= r; dx += 2) {
-        const cx = Math.round(x) + dx, cy = Math.round(y) + dy
-        if (!inBounds(cx, cy, s.width, s.height)) continue
+  const cx0 = Math.round(x), cy0 = Math.round(y)
+  // Search ring by ring, step=1 (not 2) — don't skip tiles
+  for (let r = 1; r <= range; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        // Only check the ring at distance r (skip inner tiles already checked)
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue
+        const cx = cx0 + dx, cy = cy0 + dy
+        if (cx < 0 || cy < 0 || cx >= s.width || cy >= s.height) continue
         const t = s.terrain[idx(cx, cy, s.width)]
         if (t === 5 || t === 6) {
           // skip if another harvester is already harvesting/heading to this tile
           const occupied = s.units.some(o => o.type === 'harvester' && o.id !== exceptUnitId &&
             Math.round(o.tx) === cx && Math.round(o.ty) === cy)
           if (occupied) continue
-          const d = dist(x, y, cx, cy)
+          const d = dist(x, y, cx + 0.5, cy + 0.5)
           if (d < bestD) { bestD = d; best = { x: cx + 0.5, y: cy + 0.5 } }
         }
       }
     }
-    if (best && r > 4) break
+    if (best) break  // found nearest spice at this ring — done
+  }
+  // If nothing found with exceptUnitId, try without (allow shared spice tiles)
+  if (!best && exceptUnitId !== undefined) {
+    return findNearestSpice(s, x, y, range)
   }
   return best
 }
@@ -719,32 +862,35 @@ function updateUnits(s: GameState) {
     const dmgMult = u.type === 'tank' ? getUpgrade(s, u.owner, 'tankDmg') : 1
     const speed = cfg.speed * spdMult
     const dmg = cfg.dmg * dmgMult
+    // Throttle expensive AI decisions (spice/enemy search) to every 4 ticks
+    const thinkSlow = s.tick % 4 === 0
 
     // harvester AI — unload ONLY at refinery (spice plant)
     if (u.type === 'harvester') {
+      const harv = u as any
       if (u.state === 'idle') {
-        if (u.cargo >= u.maxCargo) {
-          // full — must go to a refinery. If none exists, wait at base.
+        if (harv.cargo >= harv.maxCargo) {
+          // full — find refinery (every tick, not just thinkSlow)
           const refinery = findNearestRefinery(s, u.x, u.y, u.owner)
           if (refinery) {
-            // find a free unloading point around the refinery (no stacking)
             const up = findUnloadPoint(s, refinery, u.x, u.y, u.id)
-            if (up) { u.tx = up.x; u.ty = up.y; u.state = 'return' }
+            if (up) { u.tx = up.x; u.ty = up.y; u.state = 'return'; computePath(s, u) }
           } else {
-            // no refinery — go to palace and wait nearby (distributed)
             const palace = findNearestPalace(s, u.x, u.y, u.owner)
             if (palace) {
               const up = findUnloadPoint(s, palace, u.x, u.y, u.id)
               if (up) {
                 const d = dist(u.x, u.y, up.x, up.y)
-                if (d > 2) { u.tx = up.x; u.ty = up.y; u.state = 'return' }
-                // else: stay idle and wait for refinery
+                if (d > 2) { u.tx = up.x; u.ty = up.y; u.state = 'return'; computePath(s, u) }
               }
             }
           }
         } else {
-          const sp = findNearestSpice(s, u.x, u.y, 30, u.id)
-          if (sp) { u.tx = sp.x; u.ty = sp.y; u.state = 'harvest' }
+          // find spice — search whole map
+          const sp = findNearestSpice(s, u.x, u.y, 48, u.id)
+          if (sp) {
+            u.tx = sp.x; u.ty = sp.y; u.state = 'harvest'; computePath(s, u)
+          }
         }
       } else if (u.state === 'harvest') {
         const d = dist(u.x, u.y, u.tx, u.ty)
@@ -767,7 +913,7 @@ function updateUnits(s: GameState) {
               const refinery = findNearestRefinery(s, u.x, u.y, u.owner)
               if (refinery) {
                 const up = findUnloadPoint(s, refinery, u.x, u.y, u.id)
-                if (up) { u.tx = up.x; u.ty = up.y; u.state = 'return' }
+                if (up) { u.tx = up.x; u.ty = up.y; u.state = 'return'; computePath(s, u) }
                 else u.state = 'idle' // refinery busy, wait
               } else {
                 u.state = 'idle' // will wait at base
@@ -775,73 +921,37 @@ function updateUnits(s: GameState) {
             }
           }
         } else {
-          moveToward(s, u, u.tx, u.ty, speed)
+          followPath(s, u, speed)
         }
       } else if (u.state === 'return') {
-        // Find which refinery/palace this unload point belongs to
-        const refinery = findNearestRefinery(s, u.tx, u.ty, u.owner)
-        const palace = findNearestPalace(s, u.tx, u.ty, u.owner)
-        // determine target building (closest to unload point)
-        let targetBld: Building | null = null
-        if (refinery) {
-          const dR = dist(u.tx, u.ty, refinery.x + refinery.w/2, refinery.y + refinery.h/2)
-          if (palace) {
-            const dP = dist(u.tx, u.ty, palace.x + palace.w/2, palace.y + palace.h/2)
-            targetBld = dR < dP ? refinery : palace
-          } else targetBld = refinery
-        } else if (palace) targetBld = palace
-
-        // If target is palace (no refinery), just wait nearby — don't unload
-        if (targetBld && targetBld.type !== 'refinery') {
-          const d = dist(u.x, u.y, u.tx, u.ty)
-          if (d < 1.5) {
-            u.state = 'idle' // wait at base for refinery
-          } else {
-            moveToward(s, u, u.tx, u.ty, speed)
-          }
-          continue
-        }
-        // Check if another harvester is occupying our unload point
+        // Move toward unload point, unload when close
         const d = dist(u.x, u.y, u.tx, u.ty)
-        const blockedByOther = s.units.some(o => o.id !== u.id && o.type === 'harvester' &&
-          Math.round(o.x) === Math.round(u.tx) && Math.round(o.y) === Math.round(u.ty) &&
-          dist(o.x, o.y, u.tx, u.ty) < 0.8)
-        if (blockedByOther && d < 2) {
-          // our spot taken — find a new free unload point
-          if (refinery) {
-            const up = findUnloadPoint(s, refinery, u.x, u.y, u.id)
-            if (up) { u.tx = up.x; u.ty = up.y }
-            else u.state = 'idle' // wait
-          } else {
-            u.state = 'idle'
-          }
-        } else if (d < 1.2) {
-          // unload gradually
+        if (d < 1.5) {
+          // Close enough — unload gradually
           const unloadRate = 8
-          const unload = Math.min(u.cargo, unloadRate)
+          const unload = Math.min(harv.cargo, unloadRate)
           const credits = unload * 5
-          u.cargo -= unload
+          harv.cargo -= unload
           s.players[u.owner].credits += credits
-          if (u.owner === 'atreides' && credits > 0) {
-            if (s.tick % 4 === 0) logEvent(s, 'spice', `+${credits}$ (переработка)`)
+          if (u.owner === 'atreides' && credits > 0 && s.tick % 4 === 0) {
+            logEvent(s, 'spice', `+${credits}$ (переработка)`)
           }
-          if (u.cargo <= 0) {
-            u.cargo = 0
+          if (harv.cargo <= 0) {
+            harv.cargo = 0
             u.state = 'idle'
           }
         } else {
-          moveToward(s, u, u.tx, u.ty, speed)
+          followPath(s, u, speed)
         }
       }
       continue
     }
 
     // combat units
-    if (u.state === 'idle') {
+    if (u.state === 'idle' && thinkSlow) {
       const autoRange = u.type === 'tank' ? cfg.range * 2.5 : cfg.range * 2
       const enemy = findNearestEnemy(s, u.x, u.y, u.owner, autoRange)
       if (enemy) {
-        // save current position as home to return to after combat
         u.homeX = u.x
         u.homeY = u.y
         if ('cargo' in enemy) u.targetUnitId = (enemy as Unit).id
@@ -894,15 +1004,20 @@ function updateUnits(s: GameState) {
           u.cooldown = cfg.atkCd
         }
       } else {
-        moveToward(s, u, tx, ty, speed)
+        // Move toward target — recompute path if target moved or no path
+        if (!u.path || u.path.length === 0 || s.tick % 20 === 0) {
+          u.tx = tx; u.ty = ty
+          computePath(s, u)
+        }
+        followPath(s, u, speed)
       }
     }
 
     if (u.state === 'move') {
       const d = dist(u.x, u.y, u.tx, u.ty)
-      if (d < 0.4) u.state = 'idle'
+      if (d < 0.4) { u.state = 'idle'; u.path = []; u.pathIdx = 0 }
       else {
-        moveToward(s, u, u.tx, u.ty, speed)
+        followPath(s, u, speed)
         // auto-attack only if enemy is right next to us (don't break long moves)
         const enemy = findNearestEnemy(s, u.x, u.y, u.owner, cfg.range * 0.5)
         if (enemy && 'cargo' in enemy) {
@@ -952,10 +1067,6 @@ function findNearestFreeTile(s: GameState, x: number, y: number, exceptUnitId: n
 }
 
 // ---------- Pathfinding (BFS) ----------
-// Cached BFS path from a tile to a target tile, avoiding blocked tiles & occupied tiles.
-// Returns next step {x,y} or null if no path found within maxDepth.
-const pathCache = new Map<string, { x: number; y: number } | null>()
-
 function isTileFree(s: GameState, x: number, y: number, exceptUnitId: number): boolean {
   if (!isWalkable(s.terrain, x, y, s.width, s.height)) return false
   if (tileHasBuilding(s, x, y)) return false
@@ -974,47 +1085,60 @@ function findNextStep(s: GameState, fromX: number, fromY: number, toX: number, t
   const fx = Math.round(fromX), fy = Math.round(fromY)
   const tx = Math.round(toX), ty = Math.round(toY)
   if (fx === tx && fy === ty) return { x: tx + 0.5, y: ty + 0.5 }
-  // BFS
   const w = s.width, h = s.height
   const visited = new Uint8Array(w * h)
   const cameFrom = new Int32Array(w * h).fill(-1)
-  const queue: number[] = [fy * w + fx]
-  visited[fy * w + fx] = 1
+  // Pre-compute building occupancy grid (fast lookup, avoids .some() per tile)
+  const bldGrid = new Uint8Array(w * h)
+  for (const b of s.buildings) {
+    for (let dy = 0; dy < b.h; dy++) for (let dx = 0; dx < b.w; dx++) {
+      const bx = b.x + dx, by = b.y + dy
+      if (bx >= 0 && by >= 0 && bx < w && by < h) bldGrid[by * w + bx] = 1
+    }
+  }
+  // BFS with index pointer (O(1) dequeue, no array.shift)
+  const queue = new Int32Array(w * h)
+  let qHead = 0, qTail = 0
+  const startIdx = fy * w + fx
+  queue[qTail++] = startIdx
+  visited[startIdx] = 1
   const targetIdx = ty * w + tx
-  const maxDepth = 120
+  const maxDepth = 80
   let depth = 0
-  const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]]
   let found = false
-  while (queue.length && depth < maxDepth) {
-    const cur = queue.shift()!
+  // 4-directional first (faster, avoids diagonal corner-cutting issues)
+  const dirs4 = [1, 0, -1, 0, 0, 1, 0, -1]
+  while (qHead < qTail && depth < maxDepth) {
+    const cur = queue[qHead++]
     depth++
     if (cur === targetIdx) { found = true; break }
-    const cx = cur % w, cy = Math.floor(cur / w)
-    for (const [dx, dy] of dirs) {
-      const nx = cx + dx, ny = cy + dy
+    const cx = cur % w, cy = (cur - cx) / w
+    for (let d = 0; d < 8; d += 2) {
+      const nx = cx + dirs4[d], ny = cy + dirs4[d + 1]
       if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
       const ni = ny * w + nx
       if (visited[ni]) continue
-      // target tile is always passable even if occupied (we just need to reach adjacent)
-      if (ni !== targetIdx && !isTilePassable(s, nx, ny, unitId)) continue
+      // target tile always passable; others must be walkable + no building
+      if (ni !== targetIdx) {
+        const t = s.terrain[ni]
+        if (t !== 1 && t !== 2 && t !== 5 && t !== 6) continue
+        if (bldGrid[ni]) continue
+      }
       visited[ni] = 1
       cameFrom[ni] = cur
-      queue.push(ni)
+      queue[qTail++] = ni
     }
   }
-  if (!found && visited[targetIdx] === 0) {
-    // no path — find closest visited tile to target as fallback
-    return null
-  }
+  if (!found) return null
   // reconstruct: walk back from target to find first step
   let cur = targetIdx
   let prev = cameFrom[cur]
   if (prev < 0) return null
-  while (prev !== fy * w + fx && cameFrom[prev] >= 0) {
+  while (prev !== startIdx && cameFrom[prev] >= 0) {
     cur = prev
     prev = cameFrom[cur]
   }
-  const nx = cur % w, ny = Math.floor(cur / w)
+  const nx = cur % w, ny = (cur - nx) / w
   return { x: nx + 0.5, y: ny + 0.5 }
 }
 
@@ -1022,9 +1146,7 @@ function moveToward(s: GameState, u: Unit, tx: number, ty: number, speed: number
   const dx = tx - u.x, dy = ty - u.y
   const d = Math.hypot(dx, dy)
   if (d < 0.05) return
-  // update facing direction toward target
   u.facing = Math.atan2(dy, dx)
-  // If close to target, move directly (smooth final approach) — but never stack
   if (d < speed * 2) {
     const tr = Math.round(tx), tc = Math.round(ty)
     const free = isTileFree(s, tr, tc, u.id) || (Math.round(u.x) === tr && Math.round(u.y) === tc)
@@ -1033,28 +1155,21 @@ function moveToward(s: GameState, u: Unit, tx: number, ty: number, speed: number
       u.y = Math.max(0.5, Math.min(s.height - 0.5, u.y + (dy / d) * Math.min(speed, d)))
       return
     }
-    // if d < 0.4 but tile occupied by another unit — stop (don't stack)
     if (d < 0.4) return
   }
-  // Try direct movement first (fast path — most of the time this works)
   const ux = (dx / d) * speed, uy = (dy / d) * speed
-  const directCandidates = [
-    [u.x + ux, u.y + uy],
-    [u.x + ux, u.y],
-    [u.x, u.y + uy],
-  ]
-  for (const [nx, ny] of directCandidates) {
-    const tileX = Math.round(nx), tileY = Math.round(ny)
-    if (!isWalkable(s.terrain, tileX, tileY, s.width, s.height)) continue
-    if (s.buildings.some(b => b.x === tileX && b.y === tileY)) continue
-    const other = s.units.find(o => o.id !== u.id && Math.round(o.x) === tileX && Math.round(o.y) === tileY && dist(o.x, o.y, nx, ny) < 0.5)
-    if (other) continue
-    u.x = Math.max(0.5, Math.min(s.width - 0.5, nx))
-    u.y = Math.max(0.5, Math.min(s.height - 0.5, ny))
-    return
+  // Try diagonal first — if blocked, skip slide candidates and go to BFS
+  const diagX = u.x + ux, diagY = u.y + uy
+  const diagTileX = Math.round(diagX), diagTileY = Math.round(diagY)
+  if (isWalkable(s.terrain, diagTileX, diagTileY, s.width, s.height) && !tileHasBuilding(s, diagTileX, diagTileY)) {
+    const other = s.units.find(o => o.id !== u.id && Math.round(o.x) === diagTileX && Math.round(o.y) === diagTileY && dist(o.x, o.y, diagX, diagY) < 0.5)
+    if (!other) {
+      u.x = Math.max(0.5, Math.min(s.width - 0.5, diagX))
+      u.y = Math.max(0.5, Math.min(s.height - 0.5, diagY))
+      return
+    }
   }
-  // Direct path blocked — use BFS pathfinding (every few ticks to save CPU)
-  // Only run BFS if unit is stuck (hasn't moved this tick would be detected by caller)
+  // Diagonal blocked → use BFS to find path around obstacle
   const step = findNextStep(s, u.x, u.y, tx, ty, u.id)
   if (step) {
     const sdx = step.x - u.x, sdy = step.y - u.y
@@ -1324,7 +1439,7 @@ function tryAIBuild(s: GameState, owner: Faction, type: BuildingType, near: Buil
 // ---------- Russian names ----------
 export function typeRu(t: string): string {
   const m: Record<string,string> = {
-    palace:'Дворец', barracks:'Казармы', factory:'Фабрика', turret:'Турель', refinery:'Спайс-завод', generator:'Генератор', radar:'Радар',
+    palace:'Дворец', barracks:'Казармы', factory:'Фабрика', turret:'Турель', refinery:'Спайс-завод', generator:'Генератор', radar:'Радар', techlab:'Центр исследований',
     harvester:'Доставщик', soldier:'Солдат', tank:'Танк',
   }
   return m[t] || t
@@ -1333,7 +1448,7 @@ export function unitName(t: UnitType): string {
   return { harvester: 'доставщик', soldier: 'солдат', tank: 'танк' }[t]
 }
 export function bldName(t: BuildingType): string {
-  return { palace: 'дворец', barracks: 'казармы', factory: 'фабрику', turret: 'турель', refinery: 'спайс-завод', generator: 'генератор', radar: 'радар' }[t]
+  return { palace: 'дворец', barracks: 'казармы', factory: 'фабрику', turret: 'турель', refinery: 'спайс-завод', generator: 'генератор', radar: 'радар', techlab: 'центр исследований' }[t]
 }
 export function factionRu(f: Faction): string {
   return { atreides: 'Атрейдес', harkonnen: 'Харконнен', ordos: 'Ордос', neutral: 'Нейтрал' }[f]
