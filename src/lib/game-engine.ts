@@ -501,7 +501,7 @@ function spawnExplosion(s: GameState, x: number, y: number, size = 1, color = '#
 export function canBuild(s: GameState, owner: Faction, type: BuildingType, x: number, y: number): boolean {
   const fp = FOOTPRINT[type]
   if (!fp) return false
-  // check all footprint tiles are buildable and free
+  // 1. Check all footprint tiles are buildable terrain and free of other buildings
   for (let dy = 0; dy < fp.h; dy++) {
     for (let dx = 0; dx < fp.w; dx++) {
       const tx = x + dx, ty = y + dy
@@ -509,10 +509,23 @@ export function canBuild(s: GameState, owner: Faction, type: BuildingType, x: nu
       if (tileHasBuilding(s, tx, ty)) return false
     }
   }
+  // 2. Require a 1-tile walkable gap around the footprint so units can path
+  //    between buildings. Without this, wall-to-wall buildings create pockets
+  //    where units get stuck. The ring (dx/dy in {-1, fp.w/fp.h}) must be free
+  //    of other building footprints. Map edges count as "open" (no gap needed
+  //    against the edge).
+  for (let dy = -1; dy <= fp.h; dy++) {
+    for (let dx = -1; dx <= fp.w; dx++) {
+      // skip the footprint interior (already validated above)
+      if (dx >= 0 && dx < fp.w && dy >= 0 && dy < fp.h) continue
+      const tx = x + dx, ty = y + dy
+      if (tx < 0 || ty < 0 || tx >= s.width || ty >= s.height) continue
+      if (tileHasBuilding(s, tx, ty)) return false
+    }
+  }
   const cost = BUILD_COSTS[type] ?? 0
   if (s.players[owner].credits < cost) return false
-  // buildings can be placed adjacent to each other (no distance requirement)
-  // just require at least one friendly building within reasonable range OR within 6 tiles of any friendly building
+  // 3. Must be within 6 tiles of an existing friendly building (base radius)
   const cx = x + fp.w / 2, cy = y + fp.h / 2
   const near = s.buildings.some(b => b.owner === owner && dist(b.x + b.w / 2, b.y + b.h / 2, cx, cy) < 6)
   return near
@@ -1423,9 +1436,10 @@ function updateAI(s: GameState) {
 }
 
 function tryAIBuild(s: GameState, owner: Faction, type: BuildingType, near: Building) {
-  // search around the near building's footprint
+  // search around the near building's footprint.
+  // Radius is larger (8) because the 1-tile gap rule reduces available spots.
   const cx = near.x + near.w / 2, cy = near.y + near.h / 2
-  for (let r = 1; r <= 5; r++) {
+  for (let r = 1; r <= 8; r++) {
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
         const x = Math.round(cx) + dx, y = Math.round(cy) + dy

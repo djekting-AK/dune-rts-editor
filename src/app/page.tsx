@@ -486,6 +486,21 @@ function MenuScreen({ setMode, difficulty, setDifficulty, onStartGame, onOpenEdi
 // ============================================================
 //  GAME SCREEN
 // ============================================================
+
+// Cache of semi-transparent building preview images for the build-mode ghost.
+// Keyed by building type. Loaded lazily from getBuildingPreview data URLs.
+const buildingPreviewImgCache = new Map<string, HTMLImageElement>()
+function getBuildingPreviewImg(type: BuildingType): HTMLImageElement | null {
+  if (typeof window === 'undefined') return null
+  let img = buildingPreviewImgCache.get(type)
+  if (!img) {
+    img = new Image()
+    img.src = getBuildingPreview(type, 'atreides', 96, FOOTPRINT[type].w, FOOTPRINT[type].h)
+    buildingPreviewImgCache.set(type, img)
+  }
+  return img
+}
+
 function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFullscreen }: {
   difficulty: 'easy'|'medium'|'hard'; terrain: number[]; w: number; h: number; onExit: ()=>void
   isFullscreen: boolean; toggleFullscreen: ()=>void
@@ -528,6 +543,10 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
   const [selected, setSelected] = useState<{type:'unit'|'building', id:number} | null>(null)
   const [buildMode, setBuildMode] = useState<BuildingType | null>(null)
   const [hoverCell, setHoverCell] = useState<{x:number,y:number}|null>(null)
+  // Build preview: once the user single-clicks in build mode, a semi-transparent
+  // building outline is "dropped" here. It follows the cursor until a double-click
+  // confirms placement. null = no preview dropped yet (just hover ghost).
+  const [buildPreview, setBuildPreview] = useState<{x:number,y:number}|null>(null)
   const [showHelp, setShowHelp] = useState(false)
   const [zoom, setZoom] = useState(1.0)
   const [pan, setPan] = useState<{x: number; y: number}>({x: 0, y: 0})
@@ -539,6 +558,9 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
   const zoomRef = useRef(zoom); zoomRef.current = zoom
   const panRef = useRef(pan); panRef.current = pan
   const hoverCellRef = useRef(hoverCell); hoverCellRef.current = hoverCell
+  const buildPreviewRef = useRef(buildPreview); buildPreviewRef.current = buildPreview
+  // last build tap (cell + time) for double-click detection (mouse + touch)
+  const lastBuildTapRef = useRef<{x:number,y:number,time:number}|null>(null)
   const panelOpenRef = useRef(panelOpen); panelOpenRef.current = panelOpen
   // mouse middle-button pan
   const mousePanRef = useRef<{x:number;y:number;panning:boolean} | null>(null)
@@ -638,12 +660,32 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
 
   const handlePointerMove = (e: React.PointerEvent) => {
     const ps = pointerStateRef.current
+    // Always track hover cell (for build preview ghost + dropped preview follow)
+    const cell = cellFromEvt(e)
+    if (cell && (hoverCellRef.current?.x !== cell.x || hoverCellRef.current?.y !== cell.y)) {
+      setHoverCell(cell)
+      // If a build preview is dropped, it follows the cursor/finger
+      if (buildModeRef.current && buildPreviewRef.current) {
+        setBuildPreview({ x: cell.x, y: cell.y })
+      }
+    }
+
     if (!ps.isDown) return
 
     const dx = e.clientX - ps.lastX
     const dy = e.clientY - ps.lastY
     const totalDx = e.clientX - ps.startX
     const totalDy = e.clientY - ps.startY
+
+    // In build mode with a dropped preview, dragging repositions the preview
+    // (already updated above via hover follow) — do NOT pan. Just mark as moved
+    // so the pointer-up doesn't fire a tap (which would double-place).
+    if (buildModeRef.current && buildPreviewRef.current) {
+      if (Math.hypot(totalDx, totalDy) > 8) ps.moved = true
+      ps.lastX = e.clientX
+      ps.lastY = e.clientY
+      return
+    }
 
     // If moved > 8px → it's a drag (pan), not a tap
     if (Math.hypot(totalDx, totalDy) > 8) {
@@ -690,10 +732,28 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
     const sel = selectedRef.current
     const bm = buildModeRef.current
 
-    // 1. Build mode — place or cancel (always returns)
+    // 1. Build mode — preview + double-click to place
+    //    First tap: drop/move the semi-transparent preview at the tapped cell.
+    //    The preview then follows the cursor (see handlePointerMove).
+    //    Second tap on the SAME cell within 400ms: place the building & exit.
     if (bm) {
-      placeBuilding(s, 'atreides', bm, cell.x, cell.y)
-      setBuildMode(null)
+      const now = Date.now()
+      const last = lastBuildTapRef.current
+      const isDoubleTap = !!last && last.x === cell.x && last.y === cell.y && (now - last.time) < 400
+      if (isDoubleTap) {
+        if (canBuild(s, 'atreides', bm, cell.x, cell.y)) {
+          placeBuilding(s, 'atreides', bm, cell.x, cell.y)
+        } else {
+          toast.error('Здесь нельзя строить')
+        }
+        setBuildMode(null)
+        setBuildPreview(null)
+        lastBuildTapRef.current = null
+        return
+      }
+      // Single tap → drop/move preview to this cell
+      setBuildPreview({ x: cell.x, y: cell.y })
+      lastBuildTapRef.current = { x: cell.x, y: cell.y, time: now }
       return
     }
 
@@ -777,10 +837,12 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
     setSelected(null)
     setPanelOpen(false)
     setBuildMode(null)
+    setBuildPreview(null)
+    lastBuildTapRef.current = null
   }
   // reset zoom/pan on Esc
   useEffect(() => {
-    const k = (e: KeyboardEvent) => { if (e.key === 'Escape') { setBuildMode(null); setSelected(null); setPanelOpen(false); setZoom(1.0); centerOnBase() } }
+    const k = (e: KeyboardEvent) => { if (e.key === 'Escape') { setBuildMode(null); setBuildPreview(null); lastBuildTapRef.current = null; setSelected(null); setPanelOpen(false); setZoom(1.0); centerOnBase() } }
     window.addEventListener('keydown', k)
     return () => window.removeEventListener('keydown', k)
   }, [])
@@ -851,13 +913,62 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
         // blit cached terrain
         ctx.drawImage(terrainCacheRef.current, 0, 0)
 
-        // build preview
-        if (buildModeRef.current && hoverCellRef.current) {
+        // build preview — two modes:
+        //  (a) hover ghost: buildMode active but no preview dropped yet → faint ghost at hoverCell
+        //  (b) dropped preview: semi-transparent building image + dashed outline + gap ring
+        //      at buildPreview position (follows cursor, see handlePointerMove)
+        if (buildModeRef.current) {
           const bm = buildModeRef.current
           const fp = FOOTPRINT[bm]
-          const ok = canBuild(s, 'atreides', bm, hoverCellRef.current.x, hoverCellRef.current.y)
-          ctx.fillStyle = ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'
-          ctx.fillRect(hoverCellRef.current.x*TILE_SIZE, hoverCellRef.current.y*TILE_SIZE, fp.w*TILE_SIZE, fp.h*TILE_SIZE)
+          // dropped preview takes priority; fall back to hover ghost
+          const pv = buildPreviewRef.current || hoverCellRef.current
+          if (pv) {
+            const px = pv.x, py = pv.y
+            const ok = canBuild(s, 'atreides', bm, px, py)
+            const x0 = px * TILE_SIZE, y0 = py * TILE_SIZE
+            const w0 = fp.w * TILE_SIZE, h0 = fp.h * TILE_SIZE
+            // 1. 1-tile gap ring (faint) — shows the required spacing around the building
+            ctx.save()
+            ctx.fillStyle = ok ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)'
+            ctx.fillRect(x0 - TILE_SIZE, y0 - TILE_SIZE, w0 + 2 * TILE_SIZE, h0 + 2 * TILE_SIZE)
+            ctx.restore()
+            // 2. semi-transparent fill of the footprint
+            ctx.save()
+            ctx.fillStyle = ok ? 'rgba(34,197,94,0.28)' : 'rgba(239,68,68,0.28)'
+            ctx.fillRect(x0, y0, w0, h0)
+            // 3. semi-transparent building image (ghost) if loaded
+            const img = getBuildingPreviewImg(bm)
+            if (img && img.complete && img.naturalWidth > 0) {
+              ctx.globalAlpha = 0.55
+              ctx.drawImage(img, x0, y0, w0, h0)
+              ctx.globalAlpha = 1
+            }
+            ctx.restore()
+            // 4. dashed outline (full alpha) — the "обводка здания"
+            ctx.save()
+            ctx.strokeStyle = ok ? '#22c55e' : '#ef4444'
+            ctx.lineWidth = 2
+            ctx.setLineDash([6, 4])
+            ctx.lineDashOffset = -tNow * 8  // marching ants
+            ctx.strokeRect(x0 + 1, y0 + 1, w0 - 2, h0 - 2)
+            ctx.restore()
+            // 5. gap-ring dashed border (very faint) — visual hint for the spacing rule
+            ctx.save()
+            ctx.strokeStyle = ok ? 'rgba(34,197,94,0.35)' : 'rgba(239,68,68,0.35)'
+            ctx.lineWidth = 1
+            ctx.setLineDash([3, 3])
+            ctx.strokeRect(x0 - TILE_SIZE + 1, y0 - TILE_SIZE + 1, w0 + 2 * TILE_SIZE - 2, h0 + 2 * TILE_SIZE - 2)
+            ctx.restore()
+            // 6. hint text (only for dropped preview)
+            if (buildPreviewRef.current) {
+              ctx.save()
+              ctx.fillStyle = ok ? '#86efac' : '#fca5a5'
+              ctx.font = 'bold 11px system-ui, sans-serif'
+              ctx.textAlign = 'center'
+              ctx.fillText(ok ? 'двойной клик — построить' : 'нельзя строить здесь', x0 + w0 / 2, y0 - 6)
+              ctx.restore()
+            }
+          }
         }
         // buildings
         for (const b of s.buildings) {
@@ -976,6 +1087,13 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
   const handleRightClick = (e: React.MouseEvent) => {
     e.preventDefault()
     const s = gameRef.current
+    // Right-click cancels build mode (standard RTS convention)
+    if (buildModeRef.current) {
+      setBuildMode(null)
+      setBuildPreview(null)
+      lastBuildTapRef.current = null
+      return
+    }
     const cell = cellFromEvt(e); if (!cell) return
     const pt = pointFromEvt(e)
     const sel = selectedRef.current
@@ -1010,6 +1128,8 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
     const s = gameRef.current
     if (s.players.atreides.credits < BUILD_COSTS[type]) { return }
     setBuildMode(type)
+    setBuildPreview(null)
+    lastBuildTapRef.current = null
     setSelected(null)
     setPanelOpen(false)
   }
@@ -1080,8 +1200,9 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
         <div className="bg-neutral-900 border-b border-neutral-800 px-3 py-1.5 text-[10px] text-neutral-400 flex gap-2 flex-wrap shrink-0">
           <span><b className="text-emerald-400">Тап</b> выбрать</span>
           <span><b className="text-amber-400">Тап по карте</b> приказ</span>
+          <span><b className="text-amber-400"> Стройка: клик</b> превью · <b className="text-emerald-400">2 клика</b> поставить</span>
           <span><b className="text-neutral-200">Щипок</b> зум</span>
-          <span className="hidden sm:inline"><b className="text-neutral-200"> ПКМ</b> приказ</span>
+          <span className="hidden sm:inline"><b className="text-neutral-200"> ПКМ</b> отмена стройки</span>
           <span className="hidden sm:inline"><b className="text-neutral-200"> Колесо</b> зум</span>
           <span><b className="text-neutral-200"> Esc</b> сброс</span>
         </div>
@@ -1100,6 +1221,17 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
             className="block" style={{ width: '100%', height: '100%', objectFit: 'contain', cursor: 'default', touchAction: 'none' }} />
           {/* CRT retro overlay */}
           <div className="pointer-events-none absolute inset-0 crt-overlay" />
+          {/* Build mode hint banner */}
+          {buildMode && (
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 px-3 py-1.5 rounded-full bg-amber-600/90 text-white text-[11px] font-medium shadow-lg flex items-center gap-2 pointer-events-none">
+              <Hammer className="w-3.5 h-3.5"/>
+              <span>Стройка: {typeRu(buildMode)}</span>
+              <span className="text-amber-200">·</span>
+              <span className="text-amber-100">{buildPreview ? 'двойной клик — построить' : 'клик — разместить превью'}</span>
+              <span className="text-amber-200">·</span>
+              <span className="text-amber-200">ПКМ/Esc — отмена</span>
+            </div>
+          )}
           {/* Win/Lose overlay */}
           {s.over && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/85 backdrop-blur z-30">
