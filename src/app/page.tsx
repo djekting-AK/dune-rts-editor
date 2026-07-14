@@ -56,51 +56,90 @@ function emptyGrid(w: number, h: number): number[] {
 function generateDefaultMap(w: number, h: number): number[] {
   const g = new Array(w * h).fill(1)
   const rng = (() => { let s = 12345; return () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff } })()
-  // dune patches
-  for (let i = 0; i < 5; i++) {
-    const cx = Math.floor(rng() * w), cy = Math.floor(rng() * h), r = 2 + Math.floor(rng() * 3)
+
+  // ---- Terrain features for visual interest ----
+  // 1. Large dune seas (rolling sand areas, 6-8 patches)
+  const duneCount = Math.max(6, Math.floor(w * h / 400))
+  for (let i = 0; i < duneCount; i++) {
+    const cx = Math.floor(rng() * w), cy = Math.floor(rng() * h)
+    const r = 3 + Math.floor(rng() * 4)
     for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
       const x = cx + dx, y = cy + dy
       if (x < 0 || y < 0 || x >= w || y >= h) continue
       if (dx*dx + dy*dy <= r*r && rng() > 0.3) g[y*w+x] = 2
     }
   }
-  // rock plateaus
-  for (let i = 0; i < 4; i++) {
-    const cx = Math.floor(rng() * w), cy = Math.floor(rng() * h), r = 1 + Math.floor(rng() * 2)
+  // 2. Rock plateaus (buildable but visually distinct, 5-7 patches)
+  const rockCount = Math.max(5, Math.floor(w * h / 500))
+  for (let i = 0; i < rockCount; i++) {
+    const cx = Math.floor(rng() * w), cy = Math.floor(rng() * h)
+    const r = 2 + Math.floor(rng() * 3)
     for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
       const x = cx + dx, y = cy + dy
       if (x < 0 || y < 0 || x >= w || y >= h) continue
       if (dx*dx + dy*dy <= r*r) g[y*w+x] = 3
     }
   }
-  // mountains (on rock)
-  for (let i = 0; i < 3; i++) {
+  // 3. Mountain peaks (on rock, 4-6 of them)
+  const mountainCount = Math.max(4, Math.floor(w * h / 700))
+  for (let i = 0; i < mountainCount; i++) {
     const cx = Math.floor(rng() * w), cy = Math.floor(rng() * h)
-    if (g[cy*w+cx] === 3) g[cy*w+cx] = 4
+    if (g[cy*w+cx] === 3) {
+      // cluster of mountains
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const x = cx+dx, y = cy+dy
+        if (x>=0&&y>=0&&x<w&&y<h && g[y*w+x]===3 && rng()>0.5) g[y*w+x]=4
+      }
+    }
   }
-  // water lakes
-  for (let i = 0; i < 2; i++) {
-    const cx = Math.floor(rng() * w), cy = Math.floor(rng() * h), r = 2
+  // 4. Water lakes / oases (2-3, create strategic chokepoints)
+  const waterCount = Math.max(2, Math.floor(w * h / 900))
+  for (let i = 0; i < waterCount; i++) {
+    const cx = Math.floor(rng() * w), cy = Math.floor(rng() * h)
+    const r = 2 + Math.floor(rng() * 2)
     for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
       const x = cx + dx, y = cy + dy
       if (x < 0 || y < 0 || x >= w || y >= h) continue
       if (dx*dx + dy*dy <= r*r) g[y*w+x] = 7
     }
   }
-  // spice fields — ONLY on sand (tile 1), fewer but larger patches, clearly distinct
-  for (let i = 0; i < 5; i++) {
-    const cx = Math.floor(rng() * w), cy = Math.floor(rng() * h), r = 2 + Math.floor(rng() * 2)
+  // 5. Spice fields — more, larger, scattered (main resource driver)
+  //    Rich spice (6) near sand, regular spice (5) elsewhere
+  const spiceCount = Math.max(7, Math.floor(w * h / 250))
+  for (let i = 0; i < spiceCount; i++) {
+    const cx = Math.floor(rng() * w), cy = Math.floor(rng() * h)
+    const r = 2 + Math.floor(rng() * 3)
     for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
       const x = cx + dx, y = cy + dy
       if (x < 0 || y < 0 || x >= w || y >= h) continue
       const idx = y*w+x
-      if (g[idx] === 1 && rng() > 0.3) g[idx] = rng() > 0.45 ? 5 : 6
+      // spice can be on sand or dunes, not on rock/water/mountain
+      if (g[idx] === 1 || g[idx] === 2) {
+        if (rng() > 0.25) g[idx] = rng() > 0.4 ? 5 : 6
+      }
     }
   }
-  // clear corners for bases (atreides bottom-left, harkonnen top-right)
-  for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
-    if (Math.abs(dx) + Math.abs(dy) <= 3) {
+  // 6. A diagonal spice-rich "vein" through the map center (creates
+  //    contested territory players will fight over)
+  const veinLen = Math.floor(Math.min(w, h) * 0.7)
+  const startX = Math.floor(w * 0.15), startY = Math.floor(h * 0.15)
+  for (let i = 0; i < veinLen; i++) {
+    const t = i / veinLen
+    // gentle curve
+    const cx = Math.floor(startX + t * (w * 0.7) + Math.sin(t * Math.PI) * 3)
+    const cy = Math.floor(startY + t * (h * 0.7) + Math.cos(t * Math.PI) * 3)
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const x = cx+dx, y = cy+dy
+      if (x<0||y<0||x>=w||y>=h) continue
+      const idx = y*w+x
+      if (g[idx] === 1 || g[idx] === 2) {
+        if (rng() > 0.3) g[idx] = rng() > 0.3 ? 6 : 5  // mostly rich spice
+      }
+    }
+  }
+  // 7. clear corners for bases (atreides left, harkonnen right)
+  for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+    if (Math.abs(dx) + Math.abs(dy) <= 4) {
       if (3+dx >= 0 && Math.floor(h/2)+dy >= 0 && 3+dx < w && Math.floor(h/2)+dy < h) g[(Math.floor(h/2)+dy)*w + (3+dx)] = 1
       if (w-4+dx >= 0 && Math.floor(h/2)+dy >= 0 && w-4+dx < w && Math.floor(h/2)+dy < h) g[(Math.floor(h/2)+dy)*w + (w-4+dx)] = 1
     }
@@ -145,9 +184,9 @@ export default function EditorPage() {
   }, [])
 
   // editor state
-  const [gridW, setGridW] = useState(48)
-  const [gridH, setGridH] = useState(48)
-  const [grid, setGrid] = useState<number[]>(() => generateDefaultMap(48, 48))
+  const [gridW, setGridW] = useState(64)
+  const [gridH, setGridH] = useState(64)
+  const [grid, setGrid] = useState<number[]>(() => generateDefaultMap(64, 64))
   const [terrainVer, setTerrainVer] = useState(0)  // bump to invalidate terrain cache
   // invalidate terrain cache whenever grid changes
   useEffect(() => { clearTerrainCache(); setTerrainVer(v => v + 1) }, [grid, gridW, gridH])

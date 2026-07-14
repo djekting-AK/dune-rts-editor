@@ -181,10 +181,13 @@ export function followPath(s: S, u: any, speed: number): boolean {
   const nextTileX = Math.round(wp.x), nextTileY = Math.round(wp.y)
   if (isTileOccupiedByUnit(s, nextTileX, nextTileY, u.id)) {
     u.waitTicks++
-    if (u.waitTicks > 30) {
-      u.path = []
-      u.pathIdx = 0
+    if (u.waitTicks > 8) {
+      // Don't give up — try to slide around the blocker. After a short wait,
+      // nudge toward the waypoint anyway (soft collision) so units don't
+      // deadlock when many spawn / cluster at the same location. This was the
+      // root cause of "harvesters stuck at spawn" and "AI army paralyzed".
       u.waitTicks = 0
+      return moveDirectly(s, u, wp.x, wp.y, speed)
     }
     return false
   }
@@ -205,7 +208,11 @@ function moveDirectly(s: S, u: any, tx: number, ty: number, speed: number): bool
   const moveX = (dx / d) * speed
   const moveY = (dy / d) * speed
   const newX = u.x + moveX, newY = u.y + moveY
-  const tileX = Math.round(newX), tileY = Math.round(newY)
+  // NOTE: use Math.floor for tile coords, not Math.round. round(30.5) = 31 in JS
+  // (rounds half-up toward +Infinity), which wrongly places a unit standing on
+  // the y=30.5 center line INTO the y=31 tile. If that tile is a building, the
+  // unit freezes. floor(30.5) = 30 — the tile the unit visually occupies.
+  const tileX = Math.floor(newX), tileY = Math.floor(newY)
   // Try diagonal first
   if (!isBlocked(s, tileX, tileY) && !isTileOccupiedByUnit(s, tileX, tileY, u.id)) {
     u.x = Math.max(0.5, Math.min(s.width - 0.5, newX))
@@ -213,12 +220,12 @@ function moveDirectly(s: S, u: any, tx: number, ty: number, speed: number): bool
     return false
   }
   // Slide X
-  if (!isBlocked(s, Math.round(newX), Math.round(u.y)) && !isTileOccupiedByUnit(s, Math.round(newX), Math.round(u.y), u.id)) {
+  if (!isBlocked(s, Math.floor(newX), Math.floor(u.y)) && !isTileOccupiedByUnit(s, Math.floor(newX), Math.floor(u.y), u.id)) {
     u.x = Math.max(0.5, Math.min(s.width - 0.5, newX))
     return false
   }
   // Slide Y
-  if (!isBlocked(s, Math.round(u.x), Math.round(newY)) && !isTileOccupiedByUnit(s, Math.round(u.x), Math.round(newY), u.id)) {
+  if (!isBlocked(s, Math.floor(u.x), Math.floor(newY)) && !isTileOccupiedByUnit(s, Math.floor(u.x), Math.floor(newY), u.id)) {
     u.y = Math.max(0.5, Math.min(s.height - 0.5, newY))
     return false
   }
@@ -226,7 +233,7 @@ function moveDirectly(s: S, u: any, tx: number, ty: number, speed: number): bool
   const perp = [u.x + moveY, u.y - moveX, u.x - moveY, u.y + moveX]
   for (let i = 0; i < 4; i += 2) {
     const px = perp[i], py = perp[i + 1]
-    if (!isBlocked(s, Math.round(px), Math.round(py)) && !isTileOccupiedByUnit(s, Math.round(px), Math.round(py), u.id)) {
+    if (!isBlocked(s, Math.floor(px), Math.floor(py)) && !isTileOccupiedByUnit(s, Math.floor(px), Math.floor(py), u.id)) {
       u.x = Math.max(0.5, Math.min(s.width - 0.5, px))
       u.y = Math.max(0.5, Math.min(s.height - 0.5, py))
       return false

@@ -846,8 +846,23 @@ function findNearestPalace(s: GameState, x: number, y: number, owner: Faction): 
 }
 
 // Find a free tile around a building's perimeter for unloading (no stacking).
-// Picks the closest free tile not occupied by another harvester heading there.
+// For refineries, prefer the "unload platform" on the front-right side
+// (matches the platform drawn in tile-renderer.ts) so harvesters drive up
+// to it visibly. Falls back to the closest free perimeter tile otherwise.
 function findUnloadPoint(s: GameState, b: Building, x: number, y: number, exceptUnitId: number): { x: number; y: number } | null {
+  // For refineries, the platform is the tile immediately to the right of the
+  // footprint (b.x + b.w, b.y + b.h - 1) — that's where the hazard-striped
+  // pad is drawn. Harvesters drive up to it and unload.
+  if (b.type === 'refinery') {
+    const platX = b.x + b.w
+    const platY = b.y + b.h - 1
+    const occupied = s.units.some(o => o.type === 'harvester' && o.id !== exceptUnitId &&
+      Math.round(o.tx) === platX && Math.round(o.ty) === platY)
+    if (!occupied && isWalkable(s.terrain, platX, platY, s.width, s.height)) {
+      return { x: platX + 0.5, y: platY + 0.5 }
+    }
+    // platform busy → fall through to scan nearest free perimeter tile
+  }
   let best: { x: number; y: number } | null = null
   let bestD = 99
   // search perimeter tiles of the footprint
@@ -1441,16 +1456,26 @@ function updateAI(s: GameState) {
 
   // army orders
   const playerPalace = s.buildings.find(b => b.owner === 'atreides' && b.type === 'palace')
-  const threat = s.units.filter(u => u.owner === 'atreides' && u.type !== 'harvester' && dist(u.x, u.y, palace.x, palace.y) < 6)
+  const threat = s.units.filter(u => u.owner === 'atreides' && u.type !== 'harvester' && dist(u.x, u.y, palace.x, palace.y) < 8)
   if (threat.length > 0 && army.length > 0) {
+    // Defend: attack nearby threats near our base
     for (const a of army) {
-      if (a.state === 'idle' || (a.state === 'move' && dist(a.x, a.y, palace.x, palace.y) > 8)) {
+      if (a.state === 'idle' || a.state === 'attack') {
         commandAttack(s, a, threat[0].id, false)
       }
     }
   } else if (army.length >= (s.difficulty === 'hard' ? 4 : 6) && playerPalace) {
+    // Attack the player's palace.
+    // Re-issue attack orders even for units already in 'attack' state, because
+    // their previous target may have been destroyed or they may be stuck
+    // waiting. This keeps the army advancing toward the player.
     for (const a of army) {
-      if (a.state === 'idle') commandAttack(s, a, playerPalace.id, true)
+      // Re-issue if idle, or if attacking but stuck (waitTicks high) or far
+      // from the palace and not making progress.
+      const farFromPalace = dist(a.x, a.y, playerPalace.x, playerPalace.y) > 6
+      if (a.state === 'idle' || (a.state === 'attack' && farFromPalace && (a.waitTicks || 0) > 5)) {
+        commandAttack(s, a, playerPalace.id, true)
+      }
     }
   }
 }

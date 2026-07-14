@@ -1108,6 +1108,56 @@ function renderBuilding(type: BuildingType, faction: Faction, w: number, h: numb
     ctx.moveTo(roofCx + tankR * 0.85, roofCy)
     ctx.lineTo(roofCx + dw * 0.6 - tankR * 0.28, roofCy + dh * 0.2)
     ctx.stroke()
+
+    // --- Unloading platform (front-right of refinery) ---
+    // A raised diamond slab where harvesters drive up to dump spice.
+    // Drawn as a flat diamond with yellow hazard stripes + a spice-stained ramp.
+    const pfCx = cx + dw * 0.55
+    const pfCy = cy + dh * 0.35
+    const pfDw = dw * 0.45
+    const pfDh = dh * 0.45
+    // platform slab (concrete)
+    ctx.fillStyle = '#5a4a3a'
+    diamondPath(ctx, pfCx, pfCy, pfDw, pfDh)
+    ctx.fill()
+    // top face (lighter)
+    ctx.fillStyle = '#7a6a5a'
+    diamondPath(ctx, pfCx, pfCy - 2, pfDw * 0.92, pfDh * 0.92)
+    ctx.fill()
+    // hazard stripes (yellow/black) along the front edge
+    for (let i = 0; i < 4; i++) {
+      const t = i / 4
+      const sx = pfCx - pfDw * 0.4 + t * pfDw * 0.8
+      const sy = pfCy + pfDh * 0.15
+      ctx.fillStyle = i % 2 === 0 ? '#ffcc00' : '#1a1a1a'
+      ctx.beginPath()
+      ctx.moveTo(sx, sy)
+      ctx.lineTo(sx + pfDw * 0.1, sy + pfDh * 0.1)
+      ctx.lineTo(sx + pfDw * 0.15, sy + pfDh * 0.05)
+      ctx.lineTo(sx + pfDw * 0.05, sy - pfDh * 0.05)
+      ctx.closePath()
+      ctx.fill()
+    }
+    // spice stain on platform (orange glow — shows it's the unload zone)
+    const stainG = ctx.createRadialGradient(pfCx, pfCy, 0, pfCx, pfCy, pfDw * 0.5)
+    stainG.addColorStop(0, 'rgba(255,128,48,0.5)')
+    stainG.addColorStop(0.6, 'rgba(200,80,30,0.2)')
+    stainG.addColorStop(1, 'rgba(120,40,15,0)')
+    ctx.fillStyle = stainG
+    diamondPath(ctx, pfCx, pfCy - 1, pfDw * 0.7, pfDh * 0.7)
+    ctx.fill()
+    // 2 short guide rails (so it reads as a drive-up pad)
+    ctx.strokeStyle = '#3a3a3a'; ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.moveTo(pfCx - pfDw * 0.35, pfCy - pfDh * 0.1)
+    ctx.lineTo(pfCx - pfDw * 0.1, pfCy + pfDh * 0.05)
+    ctx.moveTo(pfCx + pfDw * 0.1, pfCy - pfDh * 0.05)
+    ctx.lineTo(pfCx + pfDw * 0.35, pfCy + pfDh * 0.1)
+    ctx.stroke()
+    // outline
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 1
+    diamondPath(ctx, pfCx, pfCy, pfDw, pfDh)
+    ctx.stroke()
   }
   else if (type === 'generator') {
     // ===== GENERATOR: power plant with vertical plasma core =====
