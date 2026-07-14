@@ -16,8 +16,8 @@ export const TERRAIN: Record<number, TileDef> = {
   2: { id: 2, name: 'Дюны',         category: 'terrain', walkable: true,  buildable: true  },
   3: { id: 3, name: 'Скала',        category: 'terrain', walkable: false, buildable: true  },
   4: { id: 4, name: 'Горы',         category: 'terrain', walkable: false, buildable: false },
-  5: { id: 5, name: 'Спайс',        category: 'terrain', walkable: true,  buildable: false },
-  6: { id: 6, name: 'Богатый спайс', category: 'terrain', walkable: true,  buildable: false },
+  5: { id: 5, name: 'Люмен',        category: 'terrain', walkable: true,  buildable: false },
+  6: { id: 6, name: 'Богатый люмен', category: 'terrain', walkable: true,  buildable: false },
   7: { id: 7, name: 'Вода',         category: 'terrain', walkable: false, buildable: false },
 }
 
@@ -557,7 +557,7 @@ export const FACTION_COLORS = {
 export type Faction = keyof typeof FACTION_COLORS
 
 // ---------- Building rendering (detailed, volumetric) ----------
-export type BuildingType = 'palace' | 'barracks' | 'factory' | 'turret' | 'refinery' | 'generator' | 'radar' | 'techlab'
+export type BuildingType = 'palace' | 'barracks' | 'factory' | 'turret' | 'refinery' | 'generator' | 'radar' | 'techlab' | 'shield'
 
 const buildingCache = new Map<string, HTMLCanvasElement>()
 
@@ -582,6 +582,7 @@ function getWallH(type: BuildingType): number {
     case 'turret':    return 20
     case 'radar':     return 30
     case 'techlab':   return 35
+    case 'shield':    return 30
     default:          return 30
   }
 }
@@ -1697,7 +1698,7 @@ export function drawBuilding(
 }
 
 // ---------- Unit rendering (detailed, with bob animation) ----------
-export type UnitType = 'harvester' | 'soldier' | 'tank'
+export type UnitType = 'harvester' | 'soldier' | 'tank' | 'repair'
 
 const unitCache = new Map<string, HTMLCanvasElement>()
 // 8-directional pre-rendered vehicle sprites (harvester, tank).

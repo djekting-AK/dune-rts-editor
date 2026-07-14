@@ -420,7 +420,7 @@ export class Refinery extends Building implements IPowerConsumer {
     const credits = Math.round(convert * 5)
     s.players[this.owner].credits += credits
     if (this.owner === 'atreides' && credits > 0 && s.tick % 6 === 0) {
-      s.events.unshift({ id: s.nextId++, tick: s.tick, type: 'spice', text: `+${credits}$ (переработка спайса)` })
+      s.events.unshift({ id: s.nextId++, tick: s.tick, type: 'spice', text: `+${credits}$ (переработка люмена)` })
       if (s.events.length > 12) s.events.pop()
     }
   }
@@ -456,6 +456,18 @@ export class TechLab extends Building implements IResearcher, IPowerConsumer {
     this.research = { type: id, progress: 0, totalTime: 200 }
     return true
   }
+}
+
+// Shield Tower — projects a defensive dome that blocks/damages enemies.
+// Multiple nearby shield towers merge their fields into one.
+export class Shield extends Building implements IPowerConsumer {
+  w = 1; h = 1
+  get type() { return 'shield' }
+  energyDemand(): number { return 4 }
+  // Active = dome is up (consumes energy). Toggle via UI.
+  active: boolean = false
+  // shieldRadius + shieldDmg are read from CONFIG in game-engine
+  visionRange(): number { return 5 }
 }
 
 // ============================================================
@@ -503,6 +515,18 @@ export class Tank extends Unit implements IAttacker {
   }
 }
 
+// Repair Droid — heals friendly units and buildings. No attack.
+// Low HP (fragile), medium speed. Can be assigned a repair target or
+// auto-find damaged friendlies ("free repair search").
+export class Repair extends Unit {
+  get type() { return 'repair' }
+  // repairTargetId / repairTargetIsBuilding set by commandRepair() in engine
+  repairTargetId: number | null = null
+  repairTargetIsBuilding: boolean = false
+  // freeSearch = true → auto-find nearest damaged friendly (no manual target)
+  freeSearch: boolean = true
+}
+
 // ============================================================
 //  FACTORY — create entities by type
 // ============================================================
@@ -510,7 +534,7 @@ export class Tank extends Unit implements IAttacker {
 export function createBuilding(type: BuildingType, id: number, x: number, y: number, owner: Faction): Building {
   const hpMap: Record<string, number> = {
     palace: 1500, generator: 300, barracks: 400, factory: 550,
-    turret: 280, refinery: 450, radar: 250, techlab: 350,
+    turret: 280, refinery: 450, radar: 250, techlab: 350, shield: 280,
   }
   const hp = hpMap[type] || 300
   let b: Building
@@ -523,6 +547,7 @@ export function createBuilding(type: BuildingType, id: number, x: number, y: num
     case 'refinery':    b = new Refinery(id, x, y, owner, hp); break
     case 'radar':       b = new Radar(id, x, y, owner, hp); break
     case 'techlab':     b = new TechLab(id, x, y, owner, hp); break
+    case 'shield':      b = new Shield(id, x, y, owner, hp); break
     default: throw new Error(`Unknown building type: ${type}`)
   }
   b.hp = hp * 0.5  // starts half-built (except palace — set in createGame)
@@ -534,12 +559,14 @@ export function createUnit(type: UnitType, id: number, x: number, y: number, own
     harvester: { hp: 200, speed: 0.15 },
     soldier:   { hp: 70,  speed: 0.12 },
     tank:      { hp: 160, speed: 0.09 },
+    repair:    { hp: 60,  speed: 0.13 },
   }
   const { hp, speed } = hpSpeedMap[type] || { hp: 100, speed: 0.1 }
   switch (type) {
     case 'harvester': return new Harvester(id, x, y, owner, hp, speed)
     case 'soldier':   return new Soldier(id, x, y, owner, hp, speed)
     case 'tank':      return new Tank(id, x, y, owner, hp, speed)
+    case 'repair':    return new Repair(id, x, y, owner, hp, speed)
     default: throw new Error(`Unknown unit type: ${type}`)
   }
 }

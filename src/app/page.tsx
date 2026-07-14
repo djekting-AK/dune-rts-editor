@@ -12,7 +12,7 @@ import {
   Brush, Eraser, PaintBucket, Square, Grid3x3, Save, FolderOpen,
   Download, Upload, Trash2, Undo2, Redo2, Hand, Sparkles,
   Play, Pause, Home, Hammer, Sword, Coins, Skull, Trophy, Eye, Zap, Maximize, Minimize,
-  ChevronUp,
+  ChevronUp, Volume2, VolumeX, Music,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -26,12 +26,13 @@ import {
 } from '@/lib/tile-renderer'
 import {
   createGame, tick, CONFIG, BUILD_COSTS, FOOTPRINT, TECHNOLOGIES, BUILDING_UPGRADES, UPGRADE_DEFS, type GameState, type Unit, type Building,
-  canBuild, placeBuilding, queueUnit, commandMove, commandAttack,
+  canBuild, placeBuilding, queueUnit, commandMove, commandAttack, commandRepair, commandRepairFreeSearch, toggleShield,
   cancelQueueItem, startTechResearch, startBuildingUpgrade, isTechResearched, getUpgrade, getUpgradeLevel, upgradeCost, upgradeTime, isUpgradeLevelUnlocked, upgradeGenerator, upgradeTurret,
   idx, isWalkable, isBuildable, buildingAt, dist, inBounds,
   pickUnitAt, pickBuildingAt, hasPower,
   typeRu, unitName, bldName, factionRu,
 } from '@/lib/game-engine'
+import { SFX, setMuted, isMuted, startMusic, stopMusic } from '@/lib/sound'
 
 // ============================================================
 //  EDITOR
@@ -196,7 +197,7 @@ export default function EditorPage() {
   const [showGrid, setShowGrid] = useState(false)
   const [history, setHistory] = useState<number[][]>([])
   const [redoStack, setRedoStack] = useState<number[][]>([])
-  const [mapName, setMapName] = useState('Арракис')
+  const [mapName, setMapName] = useState('Тарн')
   const [hoverCell, setHoverCell] = useState<{x:number,y:number}|null>(null)
   const [rectStart, setRectStart] = useState<{x:number,y:number}|null>(null)
   const [previewGrid, setPreviewGrid] = useState<number[] | null>(null)
@@ -480,8 +481,8 @@ function MenuScreen({ setMode, difficulty, setDifficulty, onStartGame, onOpenEdi
         backgroundImage:'repeating-linear-gradient(180deg, transparent 0px, transparent 40px, rgba(217,164,65,0.1) 40px, rgba(217,164,65,0.1) 42px)',
       }} />
       <div className="relative z-10 text-center px-6 max-w-2xl">
-        <div className="mb-2 text-7xl font-black tracking-tighter bg-gradient-to-b from-amber-300 to-orange-700 bg-clip-text text-transparent">DUNE</div>
-        <div className="text-amber-500/80 text-sm tracking-[0.4em] uppercase mb-8">Война за спайс</div>
+        <div className="mb-2 text-7xl font-black tracking-tighter bg-gradient-to-b from-amber-300 to-orange-700 bg-clip-text text-transparent">DUSTWIND</div>
+        <div className="text-amber-500/80 text-sm tracking-[0.4em] uppercase mb-8">Война за люмен</div>
 
         <div className="bg-neutral-900/70 backdrop-blur border border-neutral-700 rounded-2xl p-8 space-y-6">
           <div>
@@ -511,10 +512,10 @@ function MenuScreen({ setMode, difficulty, setDifficulty, onStartGame, onOpenEdi
           </Button>
 
           <div className="text-xs text-neutral-500 text-left space-y-1 pt-2 border-t border-neutral-800">
-            <p>• Вы — Дом Атрейдес (синий). Враг — Харконнен (фиолетовый).</p>
-            <p>• Добывайте спайс доставщиками, стройте казармы и фабрики.</p>
-            <p>• Уничтожьте дворец врага — победа. Берегите свой.</p>
-            <p>• На песке появляется Шай-Хулуд — он пожирает юниты!</p>
+            <p>• Вы — Авангард (синий). Враг — Легион (красный).</p>
+            <p>• Добывайте люмен сборщиками, стройте казармы и фабрики.</p>
+            <p>• Уничтожьте цитадель врага — победа. Берегите свою.</p>
+            <p>• На песке появляются рушители — они пожирают юниты!</p>
           </div>
         </div>
       </div>
@@ -587,6 +588,9 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
   // confirms placement. null = no preview dropped yet (just hover ghost).
   const [buildPreview, setBuildPreview] = useState<{x:number,y:number}|null>(null)
   const [showHelp, setShowHelp] = useState(false)
+  // Sound: mute toggle + music on/off
+  const [muted, setMutedState] = useState(false)
+  const [musicOn, setMusicOn] = useState(false)
   const [zoom, setZoom] = useState(1.0)
   const [pan, setPan] = useState<{x: number; y: number}>({x: 0, y: 0})
   const [panelOpen, setPanelOpen] = useState(false)
@@ -832,6 +836,25 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
         setSelected(null)
         setPanelOpen(false)
       } else {
+        // ===== Repair droid: tap on friendly damaged unit/building → assign repair =====
+        if (u.type === 'repair') {
+          if (tappedUnit && tappedUnit.owner === 'atreides' && tappedUnit.id !== u.id && tappedUnit.hp < tappedUnit.maxHp) {
+            commandRepair(s, u, tappedUnit.id, false)
+            setPanelOpen(false)
+            return
+          }
+          if (tappedBld && tappedBld.owner === 'atreides' && tappedBld.hp < tappedBld.maxHp) {
+            commandRepair(s, u, tappedBld.id, true)
+            setPanelOpen(false)
+            return
+          }
+          // tap on empty → free repair search
+          if (!tappedUnit && !tappedBld && !tappedEnemy && !tappedEnemyBld) {
+            commandRepairFreeSearch(s, u)
+            setPanelOpen(false)
+            return
+          }
+        }
         if (tappedUnit && tappedUnit.id === u.id) {
           // tap same unit → toggle panel
           setPanelOpen(p => !p)
@@ -849,8 +872,8 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
           commandAttack(s, u, tappedEnemyBld.id, true)
           setPanelOpen(false)
         } else {
-          // tap on empty map → move order (harvesters auto-harvest, ignore)
-          if (u.type !== 'harvester') {
+          // tap on empty map → move order (harvesters/repair droids ignore)
+          if (u.type !== 'harvester' && u.type !== 'repair') {
             commandMove(s, u, cell.x + 0.5, cell.y + 0.5)
           }
           setPanelOpen(false)
@@ -864,9 +887,11 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
       // building → select + open panel immediately
       setSelected({ type:'building', id:tappedBld.id })
       setPanelOpen(true)
+      SFX.select()
     } else if (tappedUnit) {
       // unit → select (no panel — opens on 2nd tap)
       setSelected({ type:'unit', id:tappedUnit.id })
+      SFX.select()
     }
     // empty → nothing
   }
@@ -1049,6 +1074,45 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
             }
           }
         }
+        // ===== Shield domes — draw AFTER buildings, BEFORE units =====
+        // Active shields project a blue translucent dome. Multiple nearby
+        // shields visually overlap (their union = one big protected area).
+        for (const b of s.buildings) {
+          if (b.type !== 'shield') continue
+          if (b.hp < b.maxHp) continue
+          if (!inView(b.x, b.y)) continue
+          const sh = b as any
+          if (!sh.active) continue
+          if (!hasPower(s, b.owner)) continue
+          const cx = (b.x + b.w / 2) * TILE_SIZE
+          const cy = (b.y + b.h / 2) * TILE_SIZE
+          const rPx = CONFIG.shield.shieldRadius * TILE_SIZE
+          // outer glow ring (pulsing)
+          const pulse = 0.85 + Math.sin(tNow * 4) * 0.15
+          ctx.save()
+          // translucent dome fill
+          const grad = ctx.createRadialGradient(cx, cy, rPx * 0.3, cx, cy, rPx)
+          grad.addColorStop(0, `rgba(80,180,255,${0.05 * pulse})`)
+          grad.addColorStop(0.7, `rgba(80,180,255,${0.12 * pulse})`)
+          grad.addColorStop(1, `rgba(80,180,255,${0.25 * pulse})`)
+          ctx.fillStyle = grad
+          ctx.beginPath(); ctx.arc(cx, cy, rPx, 0, Math.PI * 2); ctx.fill()
+          // bright edge ring
+          ctx.strokeStyle = `rgba(120,200,255,${0.6 * pulse})`
+          ctx.lineWidth = 2
+          ctx.beginPath(); ctx.arc(cx, cy, rPx, 0, Math.PI * 2); ctx.stroke()
+          // inner hexagon pattern (tech feel)
+          ctx.strokeStyle = `rgba(100,190,255,${0.15 * pulse})`
+          ctx.lineWidth = 1
+          for (let i = 0; i < 6; i++) {
+            const a = (i / 6) * Math.PI * 2 + tNow * 0.3
+            ctx.beginPath()
+            ctx.moveTo(cx, cy)
+            ctx.lineTo(cx + Math.cos(a) * rPx, cy + Math.sin(a) * rPx)
+            ctx.stroke()
+          }
+          ctx.restore()
+        }
         // move markers for selected
         const sel = selectedRef.current
         if (sel?.type === 'unit') {
@@ -1213,12 +1277,12 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
     if (!sel || sel.type !== 'building') return
     const b = s.buildings.find(b=>b.id===sel.id); if (!b) return
     const prodMap: Record<BuildingType, UnitType[]> = {
-      palace:['harvester'], barracks:['soldier'], factory:['tank'], turret:[], refinery:[], generator:[]
+      palace:['harvester'], barracks:['soldier'], factory:['tank','repair'], turret:[], refinery:[], generator:[], radar:[], techlab:[], shield:[]
     }
     if (!prodMap[b.type].includes(type)) return
     if (!hasPower(s, 'atreides')) { return }
     if (queueUnit(s, b, type)) { /* ok — event logged in engine */ }
-    
+
   }
 
   const s = gameRef.current
@@ -1262,6 +1326,19 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
         </Button>
         <Button size="sm" variant="ghost" onClick={()=>setPaused(p=>!p)} className="h-9 px-2.5 touch-manipulation">
           {paused ? <Play className="w-4 h-4"/> : <Pause className="w-4 h-4"/>}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => {
+          const m = !muted; setMutedState(m); setMuted(m)
+          if (m && musicOn) { stopMusic(); setMusicOn(false) }
+        }} className="h-9 px-2.5 touch-manipulation" title={muted ? 'Включить звук' : 'Выключить звук'}>
+          {muted ? <VolumeX className="w-4 h-4"/> : <Volume2 className="w-4 h-4"/>}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => {
+          if (muted) return  // can't play music when muted
+          const m = !musicOn; setMusicOn(m)
+          if (m) startMusic(); else stopMusic()
+        }} className={`h-9 px-2.5 touch-manipulation ${musicOn ? 'text-cyan-400' : ''} ${muted ? 'opacity-30' : ''}`} title="Фоновая музыка">
+          <Music className="w-4 h-4"/>
         </Button>
         <Button size="sm" variant="ghost" onClick={()=>setPanelOpen(p=>!p)} className="h-9 px-2.5 touch-manipulation lg:hidden">
           ☰
@@ -1312,7 +1389,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
                 {s.winner === 'atreides' ? (
                   <><Trophy className="w-16 h-16 text-amber-400 mx-auto mb-3" />
                   <div className="text-4xl font-black text-amber-400 mb-2">ПОБЕДА</div>
-                  <div className="text-neutral-400 mb-5 text-sm">Дворец Харконнен разрушен!</div></>
+                  <div className="text-neutral-400 mb-5 text-sm">Цитадель Легиона разрушена!</div></>
                 ) : (
                   <><Skull className="w-16 h-16 text-red-500 mx-auto mb-3" />
                   <div className="text-4xl font-black text-red-500 mb-2">ПОРАЖЕНИЕ</div>
@@ -1354,7 +1431,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
                         <div className="text-xs text-neutral-400">HP {Math.ceil(selUnit.hp)}/{selUnit.maxHp}</div>
                       </div>
                     </div>
-                    {selUnit.type === 'harvester' && <div className="text-xs text-orange-400">Спайс: {selUnit.cargo}/{selUnit.maxCargo}</div>}
+                    {selUnit.type === 'harvester' && <div className="text-xs text-orange-400">Люмен: {selUnit.cargo}/{selUnit.maxCargo}</div>}
                     <div className="text-xs text-neutral-400">Состояние: {stateRu(selUnit.state)}</div>
                     <div className="text-[10px] text-neutral-500 pt-1">Тап по карте — приказ</div>
                     {/* Delete unit button */}
@@ -1382,7 +1459,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
                     {/* Production buttons — large touch targets */}
                     {selBld.type === 'palace' && (
                       <Button size="sm" className="w-full h-10 bg-amber-600 hover:bg-amber-700 touch-manipulation" onClick={()=>handleProduce('harvester')}>
-                        <Hammer className="w-4 h-4 mr-1.5"/> Доставщик ({CONFIG.harvester.cost})
+                        <Hammer className="w-4 h-4 mr-1.5"/> Сборщик ({CONFIG.harvester.cost})
                       </Button>
                     )}
                     {selBld.type === 'barracks' && (
@@ -1391,9 +1468,14 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
                       </Button>
                     )}
                     {selBld.type === 'factory' && (
-                      <Button size="sm" className="w-full h-10 bg-amber-600 hover:bg-amber-700 touch-manipulation" onClick={()=>handleProduce('tank')}>
-                        <Sword className="w-4 h-4 mr-1.5"/> Танк ({CONFIG.tank.cost})
-                      </Button>
+                      <>
+                        <Button size="sm" className="w-full h-10 bg-amber-600 hover:bg-amber-700 touch-manipulation" onClick={()=>handleProduce('tank')}>
+                          <Sword className="w-4 h-4 mr-1.5"/> Танк ({CONFIG.tank.cost})
+                        </Button>
+                        <Button size="sm" className="w-full h-10 bg-cyan-700 hover:bg-cyan-600 touch-manipulation" onClick={()=>handleProduce('repair')}>
+                          <Hammer className="w-4 h-4 mr-1.5"/> Дроид-ремонтник ({CONFIG.repair.cost})
+                        </Button>
+                      </>
                     )}
                     {selBld.queue.length > 0 && (
                       <div className="space-y-1">
@@ -1543,6 +1625,26 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
                         <div className="text-[10px] text-neutral-500">Радиус: {CONFIG.radar.visionRange} тайлов</div>
                       </div>
                     )}
+                    {selBld.type === 'shield' && selBld.hp >= selBld.maxHp && (
+                      <div className="space-y-1.5">
+                        <div className="text-xs text-cyan-400 flex items-center gap-1">
+                          <Zap className="w-3 h-3"/> Щитовая вышка
+                        </div>
+                        <div className="text-[10px] text-neutral-500">
+                          Радиус купола: {CONFIG.shield.shieldRadius} тайлов · Урон врагам: {CONFIG.shield.shieldDmg}/сек
+                        </div>
+                        <Button size="sm"
+                          className={`w-full h-9 touch-manipulation ${(selBld as any).active ? 'bg-cyan-600 hover:bg-cyan-500' : 'bg-neutral-700 hover:bg-neutral-600'}`}
+                          disabled={!hasPower(s, 'atreides') && !(selBld as any).active}
+                          onClick={() => { toggleShield(s, selBld) }}>
+                          <Zap className="w-3 h-3 mr-1.5"/>
+                          {(selBld as any).active ? 'Купол активен (выкл)' : 'Включить купол'}
+                        </Button>
+                        {!(selBld as any).active && !hasPower(s, 'atreides') && (
+                          <div className="text-[9px] text-red-400">Нет энергии для купола</div>
+                        )}
+                      </div>
+                    )}
                     {selBld.type === 'techlab' && (
                       <div className="text-xs text-purple-400 space-y-0.5">
                         <div className="flex items-center gap-1">🔬 Центр исследований</div>
@@ -1557,17 +1659,17 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
                       const baseMax = ref.baseMaxSpiceStock ?? 210
                       const max = Math.round(baseMax * capMult)
                       const pct = max > 0 ? Math.min(100, Math.round((stock / max) * 100)) : 0
-                      const status = pct >= 100 ? 'Переполнен — ждите' : stock > 0 ? 'Перерабатывает...' : 'Ожидает спайс'
+                      const status = pct >= 100 ? 'Переполнен — ждите' : stock > 0 ? 'Перерабатывает...' : 'Ожидает люмен'
                       const statusColor = pct >= 100 ? 'text-red-400' : stock > 0 ? 'text-emerald-400' : 'text-neutral-500'
                       return (
                         <div className="text-xs space-y-1.5">
                           <div className="flex items-center justify-between">
-                            <span className="text-orange-400 font-medium">🏭 Спайс-завод</span>
+                            <span className="text-orange-400 font-medium">🏭 Люмен-завод</span>
                             <span className={`text-[10px] ${statusColor}`}>{status}</span>
                           </div>
                           <div>
                             <div className="flex items-center justify-between text-[10px] text-neutral-400 mb-0.5">
-                              <span>Склад спайса</span>
+                              <span>Склад люмена</span>
                               <span>{Math.round(stock)} / {max}</span>
                             </div>
                             <div className="h-2 bg-neutral-900 rounded overflow-hidden ring-1 ring-neutral-700">
@@ -1614,7 +1716,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
                     ['generator', CONFIG.generator.cost], ['barracks', CONFIG.barracks.cost],
                     ['factory', CONFIG.factory.cost], ['turret', CONFIG.turret.cost],
                     ['refinery', CONFIG.refinery.cost], ['radar', CONFIG.radar.cost],
-                    ['techlab', CONFIG.techlab.cost],
+                    ['techlab', CONFIG.techlab.cost], ['shield', CONFIG.shield.cost],
                   ] as [BuildingType, number][]).map(([t, cost]) => {
                     const can = s.players.atreides.credits >= cost
                     const active = buildMode === t
@@ -1636,7 +1738,7 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
 
               {/* Enemy info */}
               <div>
-                <h3 className="text-[11px] font-semibold uppercase text-neutral-400 mb-1">Харконнен</h3>
+                <h3 className="text-[11px] font-semibold uppercase text-neutral-400 mb-1">Легион</h3>
                 <div className="text-[11px] space-y-0.5 text-neutral-400">
                   <div className="flex justify-between"><span>Кредиты:</span><span className="font-mono text-purple-400">{Math.floor(s.players.harkonnen.credits)}</span></div>
                   <div className="flex justify-between"><span>Юнитов:</span><span className="font-mono">{s.units.filter(u=>u.owner==='harkonnen').length}</span></div>

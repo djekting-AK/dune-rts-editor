@@ -7,6 +7,7 @@ import {
   createBuilding, createUnit,
 } from './entity'
 import { findPath, followPath, computePath, invalidatePathCache, getObstacleGrid } from './pathfinding'
+import { SFX } from './sound'
 
 // Re-export entity types for page.tsx compatibility
 export type { Building, Unit } from './entity'
@@ -116,6 +117,7 @@ export const CONFIG = {
   harvester: { cost: 150, hp: 200, speed: 0.15, maxCargo: 60, buildTime: 120, dmg: 0, range: 0, atkCd: 0, energy: 2 },
   soldier:   { cost: 60,  hp: 70,  speed: 0.12,  maxCargo: 0,  buildTime: 60,  dmg: 9,  range: 1.8, atkCd: 28, energy: 1 },
   tank:      { cost: 200, hp: 160, speed: 0.09,  maxCargo: 0,  buildTime: 100, dmg: 22, range: 2.8, atkCd: 40, energy: 3 },
+  repair:    { cost: 120, hp: 60,  speed: 0.13,  maxCargo: 0,  buildTime: 80,  dmg: 0,  range: 0, atkCd: 0, energy: 1, repairRate: 2.5, repairRange: 1.5 },
   barracks:  { cost: 150, hp: 400, buildTime: 200, energy: 3, w: 2, h: 2 },
   factory:   { cost: 300, hp: 550, buildTime: 300, energy: 5, w: 3, h: 2 },
   turret:    { cost: 100, hp: 280, buildTime: 120, dmg: 16, range: 4.5, atkCd: 32, energy: 2, w: 1, h: 1, upgradeCost: 120 },
@@ -123,6 +125,7 @@ export const CONFIG = {
   generator: { cost: 120, hp: 300, buildTime: 100, energy: 0, energyOutput: 12, w: 2, h: 2, upgradeCost: 100, upgradeOutput: 12 },
   radar:     { cost: 180, hp: 250, buildTime: 140, energy: 3, w: 2, h: 2, visionRange: 12 },
   techlab:   { cost: 250, hp: 350, buildTime: 200, energy: 4, w: 2, h: 2, upgradeCost: 150 },
+  shield:    { cost: 180, hp: 280, buildTime: 140, energy: 4, w: 1, h: 1, shieldRadius: 4, shieldDmg: 6 },
   palace:    { cost: 0,   hp: 1500, buildTime: 0, energy: 0, w: 2, h: 2 },
   spiceValue: { 5: 1, 6: 2 },
   wormInterval: 3500,
@@ -144,6 +147,7 @@ export const FOOTPRINT: Record<string, { w: number; h: number }> = {
   generator: { w: 2, h: 2 },
   radar:     { w: 2, h: 2 },
   techlab:   { w: 2, h: 2 },
+  shield:    { w: 1, h: 1 },
 }
 
 // ============================================================
@@ -181,7 +185,7 @@ export const UPGRADE_DEFS: UpgradeDef[] = [
   { key: 'genOutput',   name: 'Мощность генераторов', desc: '+15% энергия за уровень', building: 'generator', perLevel: 0.15, baseCost: 200, baseTime: 140, tier1Tech: 'tech_energy', tier2Tech: 'tech_adv_energy', maxLevel: 10 },
   { key: 'harvestSpeed',name: 'Скорость добычи',   desc: '+15% скорость добычи за уровень', building: 'techlab', perLevel: 0.15, baseCost: 220, baseTime: 150, tier1Tech: 'tech_energy', tier2Tech: 'tech_adv_energy', maxLevel: 10 },
   // --- Refinery (NEW) ---
-  { key: 'refineryCap', name: 'Склад спайс-завода', desc: '+20% вместимость за уровень', building: 'refinery', perLevel: 0.20, baseCost: 180, baseTime: 130, tier1Tech: 'tech_energy', tier2Tech: 'tech_adv_energy', maxLevel: 10 },
+  { key: 'refineryCap', name: 'Склад люмен-завода', desc: '+20% вместимость за уровень', building: 'refinery', perLevel: 0.20, baseCost: 180, baseTime: 130, tier1Tech: 'tech_energy', tier2Tech: 'tech_adv_energy', maxLevel: 10 },
   { key: 'refineryRate',name: 'Скорость переработки', desc: '+15% переработка за уровень (требует больше энергии)', building: 'refinery', perLevel: 0.15, baseCost: 200, baseTime: 140, tier1Tech: 'tech_energy', tier2Tech: 'tech_adv_energy', maxLevel: 10 },
 ]
 
@@ -344,6 +348,7 @@ export const BUILD_COSTS: Record<string, number> = {
   generator: CONFIG.generator.cost,
   radar: CONFIG.radar.cost,
   techlab: CONFIG.techlab.cost,
+  shield: CONFIG.shield.cost,
 }
 
 // ---------- Generator upgrade (now via research, not instant) ----------
@@ -576,6 +581,8 @@ function spawnProjectile(
 
 function spawnExplosion(s: GameState, x: number, y: number, size = 1, color = '#ff8030') {
   s.explosions.push({ id: s.nextId++, x, y, frame: 0, maxFrame: 12, size, color })
+  // Only play explosion sound for larger explosions (avoid spam)
+  if (size >= 1.5) SFX.explosion()
 }
 
 // ---------- Building actions ----------
@@ -629,6 +636,7 @@ export function placeBuilding(s: GameState, owner: Faction, type: BuildingType, 
   recomputeEnergy(s)
   invalidatePathCache()  // building changes obstacle grid
   logEvent(s, 'build', `${owner === 'atreides' ? 'Вы строите' : 'ИИ строит'}: ${typeRu(type)}`)
+  if (owner === 'atreides') SFX.build()
   return true
 }
 
@@ -656,6 +664,66 @@ export function commandAttack(s: GameState, unit: Unit, targetId: number, isBuil
   if (isBuilding) { unit.targetBldId = targetId; unit.targetUnitId = null }
   else { unit.targetUnitId = targetId; unit.targetBldId = null }
   unit.state = 'attack'
+}
+
+// Repair droid: assign a specific target to repair
+export function commandRepair(s: GameState, unit: Unit, targetId: number, isBuilding: boolean) {
+  const r = unit as any
+  if (r.type !== 'repair') return
+  r.repairTargetId = targetId
+  r.repairTargetIsBuilding = isBuilding
+  r.freeSearch = false
+  unit.state = 'move'  // move toward target, repair when close
+  // Set tx/ty to target's position
+  if (isBuilding) {
+    const b = s.buildings.find(b => b.id === targetId)
+    if (b) { unit.tx = b.x + b.w / 2; unit.ty = b.y + b.h / 2 }
+  } else {
+    const u = s.units.find(u => u.id === targetId)
+    if (u) { unit.tx = u.x; unit.ty = u.y }
+  }
+  computePath(s, unit)
+}
+
+// Repair droid: toggle free-search mode (auto-find nearest damaged friendly)
+export function commandRepairFreeSearch(s: GameState, unit: Unit) {
+  const r = unit as any
+  if (r.type !== 'repair') return
+  r.freeSearch = true
+  r.repairTargetId = null
+  unit.state = 'idle'
+}
+
+// Toggle shield tower active state
+export function toggleShield(s: GameState, bld: Building): boolean {
+  if (bld.type !== 'shield') return false
+  if (bld.hp < bld.maxHp) return false  // not built yet
+  const sh = bld as any
+  // Can only activate if there's enough power (checked via hasPower)
+  if (!sh.active && !hasPower(s, bld.owner)) return false
+  sh.active = !sh.active
+  return true
+}
+
+// Check if a position is inside any active shield of a given owner's ENEMIES.
+// Used to block enemy movement and damage enemies inside shields.
+export function isInEnemyShield(s: GameState, x: number, y: number, owner: Faction): { inside: boolean; dmg: number } {
+  const radius = CONFIG.shield.shieldRadius
+  const dmg = CONFIG.shield.shieldDmg
+  for (const b of s.buildings) {
+    if (b.type !== 'shield') continue
+    if (b.owner === owner) continue  // own shield doesn't block
+    if (b.hp < b.maxHp) continue  // not built
+    const sh = b as any
+    if (!sh.active) continue
+    // check if has power (shield off if no power)
+    if (!hasPower(s, b.owner)) continue
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2
+    if (Math.hypot(x - cx, y - cy) <= radius) {
+      return { inside: true, dmg }
+    }
+  }
+  return { inside: false, dmg: 0 }
 }
 
 // ---------- Picking ----------
@@ -701,11 +769,11 @@ export function tick(s: GameState) {
   const hPalace = s.buildings.find(b => b.owner === 'harkonnen' && b.type === 'palace')
   if (!aPalace || aPalace.hp <= 0) {
     s.players.atreides.alive = false
-    if (!s.over) { s.over = true; s.winner = 'harkonnen'; logEvent(s, 'lose', 'Ваш дворец разрушен! Поражение.') }
+    if (!s.over) { s.over = true; s.winner = 'harkonnen'; logEvent(s, 'lose', 'Ваша цитадель разрушена! Поражение.'); SFX.lose() }
   }
   if (!hPalace || hPalace.hp <= 0) {
     s.players.harkonnen.alive = false
-    if (!s.over) { s.over = true; s.winner = 'atreides'; logEvent(s, 'win', 'Дворец Харконнен разрушен! Победа!') }
+    if (!s.over) { s.over = true; s.winner = 'atreides'; logEvent(s, 'win', 'Цитадель Легиона разрушена! Победа!'); SFX.win() }
   }
 }
 
@@ -766,6 +834,7 @@ function updateBuildings(s: GameState) {
           b.queue.shift()
           recomputeEnergy(s)
           if (b.owner === 'atreides') logEvent(s, 'build', `Создан: ${unitName(q.type)}`)
+          if (b.owner === 'atreides') SFX.produce()
         } else {
           q.progress = cfg.buildTime
         }
@@ -975,9 +1044,16 @@ function updateUnits(s: GameState) {
     if (u.cooldown > 0) u.cooldown--
     const cfg = CONFIG[u.type]
     // apply upgrades
-    const spdMult = u.type !== 'harvester' ? getUpgrade(s, u.owner, 'unitSpeed') : 1
+    const spdMult = u.type !== 'harvester' && u.type !== 'repair' ? getUpgrade(s, u.owner, 'unitSpeed') : 1
     const dmgMult = u.type === 'tank' ? getUpgrade(s, u.owner, 'tankDmg') : 1
     const speed = cfg.speed * spdMult
+    // ===== Shield damage: enemies inside active shields take damage per tick =====
+    const shieldHit = isInEnemyShield(s, u.x, u.y, u.owner)
+    if (shieldHit.inside) {
+      u.hp -= shieldHit.dmg * 0.1  // small dmg per tick (shieldDmg=6 → 0.6/tick = 6/sec)
+      // don't path through shield — nudge back
+      // (we let them take damage; pathfinding already routes around if possible)
+    }
     const dmg = cfg.dmg * dmgMult
     // Throttle expensive AI decisions (spice/enemy search) to every 4 ticks
     const thinkSlow = s.tick % 4 === 0
@@ -1063,7 +1139,7 @@ function updateUnits(s: GameState) {
           if (refAny.spiceStock >= effectiveMax) {
             // log occasionally so player understands why harvester waits
             if (u.owner === 'atreides' && s.tick % 20 === 0) {
-              logEvent(s, 'spice', 'Спайс-завод переполнен — ожидание')
+              logEvent(s, 'spice', 'Люмен-завод переполнен — ожидание')
             }
             continue
           }
@@ -1074,7 +1150,7 @@ function updateUnits(s: GameState) {
           refAny.spiceStock += unload
           harv.cargo -= unload
           if (u.owner === 'atreides' && unload > 0 && s.tick % 4 === 0) {
-            logEvent(s, 'spice', `Разгрузка: +${Math.round(unload)} спайса`)
+            logEvent(s, 'spice', `Разгрузка: +${Math.round(unload)} люмена`)
           }
           if (harv.cargo <= 0) {
             harv.cargo = 0
@@ -1083,6 +1159,69 @@ function updateUnits(s: GameState) {
         } else {
           followPath(s, u, speed)
         }
+      }
+      continue
+    }
+
+    // ===== Repair Droid logic =====
+    if (u.type === 'repair') {
+      const r = u as any
+      const repairRange = (CONFIG.repair as any).repairRange || 1.5
+      const repairRate = (CONFIG.repair as any).repairRate || 2.5
+      // Find target: manual assignment or free search
+      let target: Unit | Building | null = null
+      if (!r.freeSearch && r.repairTargetId != null) {
+        if (r.repairTargetIsBuilding) target = s.buildings.find(b => b.id === r.repairTargetId) || null
+        else target = s.units.find(x => x.id === r.repairTargetId) || null
+        // if target destroyed or full HP → switch to free search
+        if (!target || (target as any).hp >= (target as any).maxHp) {
+          r.freeSearch = true
+          r.repairTargetId = null
+          target = null
+        }
+      }
+      if (r.freeSearch && thinkSlow) {
+        // auto-find nearest damaged friendly (unit or building)
+        let best: Unit | Building | null = null
+        let bestD = 30  // search range
+        for (const o of s.units) {
+          if (o.owner !== u.owner) continue
+          if (o.id === u.id) continue
+          if (o.hp >= o.maxHp) continue
+          const d = dist(u.x, u.y, o.x, o.y)
+          if (d < bestD) { bestD = d; best = o }
+        }
+        for (const b of s.buildings) {
+          if (b.owner !== u.owner) continue
+          if (b.hp >= b.maxHp) continue
+          // don't repair buildings under construction (hp < maxHp but not damaged)
+          // Actually we DO want to help finish construction — but that's "building" not "repair"
+          // Skip construction (buildings that never reached maxHp). Heuristic: if hp < 50% it's construction.
+          // Simpler: only repair if hp < maxHp AND hp > maxHp * 0.5 (already built, now damaged)
+          // Actually let's allow repairing construction too — it speeds up building.
+          const d = dist(u.x, u.y, b.x + b.w / 2, b.y + b.h / 2)
+          if (d < bestD) { bestD = d; best = b }
+        }
+        target = best
+      }
+      if (target) {
+        const tx = (target as any).w ? (target as Building).x + (target as Building).w / 2 : (target as Unit).x
+        const ty = (target as any).w ? (target as Building).y + (target as Building).h / 2 : (target as Unit).y
+        const d = dist(u.x, u.y, tx, ty)
+        if (d <= repairRange) {
+          // close enough — repair
+          ;(target as any).hp = Math.min((target as any).maxHp, (target as any).hp + repairRate)
+          u.facing = Math.atan2(ty - u.y, tx - u.x)
+          // stay near target (no movement)
+        } else {
+          // move toward target
+          u.tx = tx; u.ty = ty
+          if (!u.path || u.path.length === 0 || thinkSlow) computePath(s, u)
+          followPath(s, u, speed)
+        }
+      } else {
+        // nothing to repair — idle
+        u.state = 'idle'
       }
       continue
     }
@@ -1217,7 +1356,7 @@ function updateUnits(s: GameState) {
       }
       s.terrainVersion++
       if (u.owner === 'atreides') {
-        logEvent(s, 'warn', `Доставщик уничтожен! Потеряно ${Math.round(cargo * (1 - pct))} спайса, ${scattered} тайлов спайса рассеяно`)
+        logEvent(s, 'warn', `Сборщик уничтожен! Потеряно ${Math.round(cargo * (1 - pct))} люмена, ${scattered} тайлов люмена рассеяно`)
       }
     }
     // Always leave a scorch mark / explosion at death location
@@ -1395,7 +1534,7 @@ function updateProjectiles(s: GameState) {
         if (t) { t.hp -= p.dmg; hit = true; if (t.hp <= 0) logEvent(s, 'death', `Разрушен ${bldName(t.type)}`) }
       } else if (p.targetWormId) {
         const t = s.worms.find(w => w.id === p.targetWormId)
-        if (t) { t.hp -= p.dmg; hit = true; if (t.hp <= 0) { logEvent(s, 'warn', 'Шай-Хулуд уничтожен!'); spawnExplosion(s, t.x, t.y, 2.5, '#ff6020') } }
+        if (t) { t.hp -= p.dmg; hit = true; if (t.hp <= 0) { logEvent(s, 'warn', 'Рушитель уничтожен!'); spawnExplosion(s, t.x, t.y, 2.5, '#ff6020') } }
       }
       if (hit) spawnExplosion(s, p.tx, p.ty, 1, p.color)
       p.life = 0
@@ -1426,7 +1565,7 @@ function updateWorms(s: GameState) {
         const nearBld = s.buildings.some(b => dist(b.x, b.y, x, y) < 6)
         if (!nearBld) {
           s.worms.push({ id: s.nextId++, x: x + 0.5, y: y + 0.5, tx: x + 0.5, ty: y + 0.5, life: CONFIG.wormLife, hp: CONFIG.wormHp, maxHp: CONFIG.wormHp, cooldown: 0, eaten: 0 })
-          logEvent(s, 'warn', 'Шай-Хулуд пробуждается!')
+          logEvent(s, 'warn', 'Рушитель пробуждается!')
           break
         }
       }
@@ -1477,12 +1616,12 @@ function updateWorms(s: GameState) {
     if (best && dist(w.x, w.y, best.x, best.y) < 0.7 && w.eaten < 2) {
       best.hp = 0
       w.eaten++
-      logEvent(s, 'warn', `Червь сожрал ${unitName(best.type)}! (${w.eaten}/2)`)
+      logEvent(s, 'warn', `Рушитель сожрал ${unitName(best.type)}! (${w.eaten}/2)`)
       spawnExplosion(s, best.x, best.y, 1.5, '#aa5020')
       if (w.eaten >= 2) {
         // worm is satiated — burrows away
         w.life = 0
-        logEvent(s, 'warn', 'Шай-Хулуд насытился и исчез в песках')
+        logEvent(s, 'warn', 'Рушитель насытился и исчез в песках')
       }
     }
   }
@@ -1571,6 +1710,22 @@ function updateAI(s: GameState) {
   if (!myBldgs.some(b => b.type === 'radar') && player.credits >= CONFIG.radar.cost && myBldgs.length >= 3) {
     tryAIBuild(s, owner, 'radar', palace)
   }
+  // build shield tower for defense (after 4 buildings)
+  if (!myBldgs.some(b => b.type === 'shield') && player.credits >= CONFIG.shield.cost && myBldgs.length >= 4) {
+    tryAIBuild(s, owner, 'shield', palace)
+  }
+  // activate shields when under threat or army is big
+  for (const sh of myBldgs.filter(b => b.type === 'shield' && b.hp >= b.maxHp)) {
+    const shAny = sh as any
+    const threat = s.units.some(u => u.owner !== owner && dist(u.x, u.y, sh.x, sh.y) < 12)
+    if (threat && !shAny.active && hasPower(s, owner)) shAny.active = true
+    if (!threat && shAny.active) shAny.active = false  // save energy when no threat
+  }
+  // build repair droids (1 per 5 combat units, max 3)
+  const repairCount = myUnits.filter(u => u.type === 'repair').length
+  if (repairCount < Math.min(3, Math.floor(army.length / 4)) && factory && factory.queue.length === 0 && player.credits >= CONFIG.repair.cost) {
+    queueUnit(s, factory, 'repair')
+  }
   // upgrade generators
   for (const gen of myBldgs.filter(b => b.type === 'generator' && b.level < 3)) {
     const upCost = CONFIG.generator.upgradeCost * gen.level
@@ -1657,20 +1812,22 @@ function tryAIBuild(s: GameState, owner: Faction, type: BuildingType, near: Buil
   return false
 }
 
-// ---------- Russian names ----------
+// ---------- Russian names (DUSTWIND lore) ----------
+// Internal faction IDs (atreides/harkonnen) are code identifiers;
+// user-facing display names use the DUSTWIND lore below.
 export function typeRu(t: string): string {
   const m: Record<string,string> = {
-    palace:'Дворец', barracks:'Казармы', factory:'Фабрика', turret:'Турель', refinery:'Спайс-завод', generator:'Генератор', radar:'Радар', techlab:'Центр исследований',
-    harvester:'Доставщик', soldier:'Солдат', tank:'Танк',
+    palace:'Цитадель', barracks:'Казармы', factory:'Фабрика', turret:'Турель', refinery:'Люмен-завод', generator:'Реактор', radar:'Радар', techlab:'Центр исследований', shield:'Щитовая вышка',
+    harvester:'Сборщик', soldier:'Страж', tank:'Танк', repair:'Дроид-ремонтник',
   }
   return m[t] || t
 }
 export function unitName(t: UnitType): string {
-  return { harvester: 'доставщик', soldier: 'солдат', tank: 'танк' }[t]
+  return { harvester: 'сборщик', soldier: 'страж', tank: 'танк', repair: 'дроид-ремонтник' }[t] || t
 }
 export function bldName(t: BuildingType): string {
-  return { palace: 'дворец', barracks: 'казармы', factory: 'фабрику', turret: 'турель', refinery: 'спайс-завод', generator: 'генератор', radar: 'радар', techlab: 'центр исследований' }[t]
+  return { palace: 'цитадель', barracks: 'казармы', factory: 'фабрику', turret: 'турель', refinery: 'люмен-завод', generator: 'реактор', radar: 'радар', techlab: 'центр исследований', shield: 'щитовую вышку' }[t] || t
 }
 export function factionRu(f: Faction): string {
-  return { atreides: 'Атрейдес', harkonnen: 'Харконнен', ordos: 'Ордос', neutral: 'Нейтрал' }[f]
+  return { atreides: 'Авангард', harkonnen: 'Легион', ordos: 'Ордос', neutral: 'Нейтрал' }[f]
 }

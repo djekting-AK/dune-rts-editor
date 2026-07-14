@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Dune RTS — War for Spice",
-  description: "RTS-игра в стиле Dune: стройте базу, добывайте спайс, сражайтесь с ИИ.",
+  title: "DUSTWIND — War for Lumen",
+  description: "DUSTWIND: RTS-игра — стройте базу, добывайте люмен, сражайтесь с Легионом.",
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
