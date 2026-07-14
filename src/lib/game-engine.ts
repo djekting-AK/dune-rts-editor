@@ -1721,7 +1721,10 @@ function updateAI(s: GameState) {
     if (threat && !shAny.active && hasPower(s, owner)) shAny.active = true
     if (!threat && shAny.active) shAny.active = false  // save energy when no threat
   }
-  // build repair droids (1 per 5 combat units, max 3)
+  // Find production buildings (declared here so repair-droid check below can use them)
+  const barracks = myBldgs.find(b => b.type === 'barracks')
+  const factory = myBldgs.find(b => b.type === 'factory')
+  // build repair droids (1 per 4 combat units, max 3)
   const repairCount = myUnits.filter(u => u.type === 'repair').length
   if (repairCount < Math.min(3, Math.floor(army.length / 4)) && factory && factory.queue.length === 0 && player.credits >= CONFIG.repair.cost) {
     queueUnit(s, factory, 'repair')
@@ -1736,9 +1739,7 @@ function updateAI(s: GameState) {
   if (army.length < 3 && player.credits >= CONFIG.turret.cost && myBldgs.filter(b => b.type === 'turret').length < 2) {
     tryAIBuild(s, owner, 'turret', palace)
   }
-  const barracks = myBldgs.find(b => b.type === 'barracks')
   if (barracks && barracks.queue.length === 0 && player.credits >= CONFIG.soldier.cost) queueUnit(s, barracks, 'soldier')
-  const factory = myBldgs.find(b => b.type === 'factory')
   if (factory && factory.queue.length === 0 && player.credits >= CONFIG.tank.cost) queueUnit(s, factory, 'tank')
 
   // army orders — AI does NOT cheat by reading player building positions.
