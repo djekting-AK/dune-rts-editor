@@ -147,10 +147,43 @@ export const FOOTPRINT: Record<string, { w: number; h: number }> = {
 }
 
 // ============================================================
-//  TWO-LEVEL RESEARCH SYSTEM
-//  Level 1: TechLab researches TECHNOLOGIES (unlocks)
-//  Level 2: Buildings/units APPLY unlocked tech (upgrade for $ + time)
+//  LEVEL-BASED UPGRADE SYSTEM (1-10 per upgrade key)
+//  - Levels 1-3: always available
+//  - Levels 4-6: require tier-1 tech researched
+//  - Levels 7-10: require tier-2 tech researched
+//  - Each level adds +15% (configurable per key)
+//  - Cost scales: baseCost * level^1.5
 // ============================================================
+
+// --- Upgrade keys and their per-level bonus ---
+export interface UpgradeDef {
+  key: string                // e.g. 'turretDmg'
+  name: string               // display name
+  desc: string               // short description
+  building: BuildingType     // which building this upgrade applies to
+  perLevel: number           // fractional bonus per level (0.15 = +15%)
+  baseCost: number           // cost for level 1
+  baseTime: number           // research time for level 1
+  tier1Tech: string          // tech id required for levels 4-6
+  tier2Tech: string          // tech id required for levels 7-10
+  maxLevel: number           // always 10
+}
+
+export const UPGRADE_DEFS: UpgradeDef[] = [
+  // --- Combat ---
+  { key: 'turretDmg',   name: 'Урон турелей',      desc: '+15% урон за уровень', building: 'turret',   perLevel: 0.15, baseCost: 150, baseTime: 120, tier1Tech: 'tech_weapons',     tier2Tech: 'tech_adv_weapons',     maxLevel: 10 },
+  { key: 'turretRange', name: 'Дальность турелей', desc: '+12% радиус за уровень', building: 'turret', perLevel: 0.12, baseCost: 180, baseTime: 130, tier1Tech: 'tech_propulsion',  tier2Tech: 'tech_adv_propulsion',  maxLevel: 10 },
+  { key: 'tankDmg',     name: 'Урон танков',       desc: '+15% урон за уровень', building: 'factory',  perLevel: 0.15, baseCost: 200, baseTime: 150, tier1Tech: 'tech_weapons',     tier2Tech: 'tech_adv_weapons',     maxLevel: 10 },
+  { key: 'unitSpeed',   name: 'Скорость юнитов',   desc: '+10% скорость за уровень', building: 'barracks', perLevel: 0.10, baseCost: 160, baseTime: 110, tier1Tech: 'tech_propulsion', tier2Tech: 'tech_adv_propulsion',  maxLevel: 10 },
+  { key: 'unitHp',      name: 'Прочность юнитов',  desc: '+12% HP за уровень',  building: 'barracks', perLevel: 0.12, baseCost: 160, baseTime: 110, tier1Tech: 'tech_armor',       tier2Tech: 'tech_adv_armor',       maxLevel: 10 },
+  { key: 'armorBld',    name: 'Броня зданий',      desc: '+12% HP зданий за уровень', building: 'techlab', perLevel: 0.12, baseCost: 250, baseTime: 180, tier1Tech: 'tech_armor',     tier2Tech: 'tech_adv_armor',       maxLevel: 10 },
+  // --- Economy ---
+  { key: 'genOutput',   name: 'Мощность генераторов', desc: '+15% энергия за уровень', building: 'generator', perLevel: 0.15, baseCost: 200, baseTime: 140, tier1Tech: 'tech_energy', tier2Tech: 'tech_adv_energy', maxLevel: 10 },
+  { key: 'harvestSpeed',name: 'Скорость добычи',   desc: '+15% скорость добычи за уровень', building: 'techlab', perLevel: 0.15, baseCost: 220, baseTime: 150, tier1Tech: 'tech_energy', tier2Tech: 'tech_adv_energy', maxLevel: 10 },
+  // --- Refinery (NEW) ---
+  { key: 'refineryCap', name: 'Склад спайс-завода', desc: '+20% вместимость за уровень', building: 'refinery', perLevel: 0.20, baseCost: 180, baseTime: 130, tier1Tech: 'tech_energy', tier2Tech: 'tech_adv_energy', maxLevel: 10 },
+  { key: 'refineryRate',name: 'Скорость переработки', desc: '+15% переработка за уровень (требует больше энергии)', building: 'refinery', perLevel: 0.15, baseCost: 200, baseTime: 140, tier1Tech: 'tech_energy', tier2Tech: 'tech_adv_energy', maxLevel: 10 },
+]
 
 // --- Technologies (researched at TechLab) ---
 export interface TechDef {
@@ -159,76 +192,33 @@ export interface TechDef {
   cost: number
   time: number
   desc: string
-  // Which building upgrades this tech unlocks
-  unlocks: { building: BuildingType; upgradeId: string; name: string; cost: number; time: number; desc: string }[]
+  tier: 1 | 2
 }
 
 export const TECHNOLOGIES: TechDef[] = [
-  {
-    id: 'tech_weapons', name: 'Оружейные технологии', cost: 300, time: 200,
-    desc: 'Открывает улучшения урона для турелей и танков',
-    unlocks: [
-      { building: 'turret', upgradeId: 'turret_dmg', name: 'Усиление турелей +50% урон', cost: 200, time: 150, desc: '+50% урон' },
-      { building: 'factory', upgradeId: 'tank_dmg', name: 'Усиление танков +50% урон', cost: 280, time: 200, desc: '+50% урон танков' },
-    ],
-  },
-  {
-    id: 'tech_propulsion', name: 'Двигательные системы', cost: 250, time: 180,
-    desc: 'Открывает улучшение скорости юнитов и дальности турелей',
-    unlocks: [
-      { building: 'barracks', upgradeId: 'unit_speed', name: 'Скорость юнитов +40%', cost: 220, time: 160, desc: '+40% скорость' },
-      { building: 'turret', upgradeId: 'turret_range', name: 'Дальнобойность турелей +30%', cost: 250, time: 180, desc: '+30% радиус' },
-    ],
-  },
-  {
-    id: 'tech_armor', name: 'Броневые технологии', cost: 280, time: 200,
-    desc: 'Открывает улучшение прочности юнитов и зданий',
-    unlocks: [
-      { building: 'barracks', upgradeId: 'unit_hp', name: 'Прочность юнитов +30%', cost: 200, time: 150, desc: '+30% HP юнитов' },
-      { building: 'techlab', upgradeId: 'armor_all', name: 'Броня всех зданий +30%', cost: 350, time: 250, desc: '+30% HP зданий' },
-    ],
-  },
-  {
-    id: 'tech_energy', name: 'Энергетические системы', cost: 250, time: 180,
-    desc: 'Открывает улучшение генераторов и скорости добычи',
-    unlocks: [
-      { building: 'techlab', upgradeId: 'gen_output', name: 'Эффективность генераторов +50%', cost: 250, time: 180, desc: '+50% энергия' },
-      { building: 'techlab', upgradeId: 'harvest_speed', name: 'Скорость добычи спайса x2', cost: 300, time: 200, desc: 'x2 добыча' },
-    ],
-  },
+  // --- Tier 1 (unlocks upgrade levels 4-6) ---
+  { id: 'tech_weapons',     name: 'Оружейные технологии',    cost: 300, time: 200, desc: 'Открывает улучшения урона (турели, танки) уровни 4-6', tier: 1 },
+  { id: 'tech_propulsion',  name: 'Двигательные системы',    cost: 250, time: 180, desc: 'Открывает улучшения скорости и дальности уровни 4-6', tier: 1 },
+  { id: 'tech_armor',       name: 'Броневые технологии',     cost: 280, time: 200, desc: 'Открывает улучшения прочности уровни 4-6', tier: 1 },
+  { id: 'tech_energy',      name: 'Энергетические системы',  cost: 250, time: 180, desc: 'Открывает улучшения генераторов и добычи уровни 4-6', tier: 1 },
+  // --- Tier 2 (unlocks upgrade levels 7-10) ---
+  { id: 'tech_adv_weapons',    name: 'Продвинутое оружие',     cost: 800,  time: 400, desc: 'Открывает улучшения урона уровни 7-10', tier: 2 },
+  { id: 'tech_adv_propulsion', name: 'Продвинутые двигатели',  cost: 700,  time: 380, desc: 'Открывает улучшения скорости/дальности уровни 7-10', tier: 2 },
+  { id: 'tech_adv_armor',      name: 'Продвинутая броня',      cost: 750,  time: 390, desc: 'Открывает улучшения прочности уровни 7-10', tier: 2 },
+  { id: 'tech_adv_energy',     name: 'Продвинутая энергетика', cost: 700,  time: 380, desc: 'Открывает улучшения генераторов/добычи/завода уровни 7-10', tier: 2 },
 ]
 
-// --- Building-level upgrades (applied after tech is researched) ---
-export interface BuildingUpgrade {
-  id: string
-  name: string
-  cost: number
-  time: number
-  desc: string
-  requiredTech: string  // tech id that must be researched first
-  apply: (s: GameState, owner: Faction) => void
-}
-
-export const BUILDING_UPGRADES: BuildingUpgrade[] = [
-  { id: 'turret_dmg', name: 'Усиление турелей +50% урон', cost: 200, time: 150, desc: '+50% урон', requiredTech: 'tech_weapons',
-    apply: (s, owner) => setUpgrade(s, owner, 'turretDmg', 1.5) },
-  { id: 'tank_dmg', name: 'Усиление танков +50% урон', cost: 280, time: 200, desc: '+50% урон танков', requiredTech: 'tech_weapons',
-    apply: (s, owner) => setUpgrade(s, owner, 'tankDmg', 1.5) },
-  { id: 'unit_speed', name: 'Скорость юнитов +40%', cost: 220, time: 160, desc: '+40% скорость', requiredTech: 'tech_propulsion',
-    apply: (s, owner) => setUpgrade(s, owner, 'unitSpeed', 1.4) },
-  { id: 'turret_range', name: 'Дальнобойность турелей +30%', cost: 250, time: 180, desc: '+30% радиус', requiredTech: 'tech_propulsion',
-    apply: (s, owner) => setUpgrade(s, owner, 'turretRange', 1.3) },
-  { id: 'unit_hp', name: 'Прочность юнитов +30%', cost: 200, time: 150, desc: '+30% HP юнитов', requiredTech: 'tech_armor',
-    apply: (s, owner) => setUpgrade(s, owner, 'unitHp', 1.3) },
-  { id: 'armor_all', name: 'Броня всех зданий +30%', cost: 350, time: 250, desc: '+30% HP зданий', requiredTech: 'tech_armor',
-    apply: (s, owner) => setUpgrade(s, owner, 'armorBld', 1.3) },
-  { id: 'gen_output', name: 'Эффективность генераторов +50%', cost: 250, time: 180, desc: '+50% энергия', requiredTech: 'tech_energy',
-    apply: (s, owner) => { setUpgrade(s, owner, 'genOutput', 1.5); recomputeEnergy(s) } },
-  { id: 'harvest_speed', name: 'Скорость добычи спайса x2', cost: 300, time: 200, desc: 'x2 добыча', requiredTech: 'tech_energy',
-    apply: (s, owner) => setUpgrade(s, owner, 'harvestSpeed', 2.0) },
-]
-
-// Keep old RESEARCH for backward compat (page.tsx imports)
+// Backward compat: BUILDING_UPGRADES is now derived from UPGRADE_DEFS
+// (page.tsx imports it, but the UI is rewritten to use UPGRADE_DEFS directly)
+export const BUILDING_UPGRADES = UPGRADE_DEFS.map(d => ({
+  id: d.key,
+  name: d.name,
+  cost: d.baseCost,
+  time: d.baseTime,
+  desc: d.desc,
+  requiredTech: d.tier1Tech,
+  apply: () => {},  // upgrades now use level-based system, apply is a no-op
+}))
 export const RESEARCH = BUILDING_UPGRADES
 
 // --- Tech state helpers ---
@@ -244,54 +234,104 @@ export function startTechResearch(s: GameState, bld: Building, techId: string): 
   if (bld.hp < bld.maxHp) return false
   if (!hasPower(s, bld.owner)) return false
   if (isTechResearched(s, bld.owner, techId)) return false
+  // Tier 2 techs require ALL tier 1 techs researched first
+  if (def.tier === 2) {
+    const tier1Ids = TECHNOLOGIES.filter(t => t.tier === 1).map(t => t.id)
+    for (const t1 of tier1Ids) {
+      if (!isTechResearched(s, bld.owner, t1)) return false
+    }
+  }
   if (s.players[bld.owner].credits < def.cost) return false
   s.players[bld.owner].credits -= def.cost
   bld.research = { type: 'tech_' + techId, progress: 0, totalTime: def.time }
   return true
 }
 
-export function startBuildingUpgrade(s: GameState, bld: Building, upgradeId: string): boolean {
-  const def = BUILDING_UPGRADES.find(u => u.id === upgradeId)
+// --- Level-based upgrade system ---
+// Returns current upgrade level (0-10) for a given upgrade key
+export function getUpgradeLevel(s: GameState, owner: Faction, key: string): number {
+  return ((s as any)._upgLevels?.[owner]?.[key]) || 0
+}
+
+// Returns the multiplier for a given upgrade key (level 0 = 1.0x)
+export function getUpgrade(s: GameState, owner: Faction, key: string): number {
+  const def = UPGRADE_DEFS.find(d => d.key === key)
+  if (!def) return 1
+  const level = getUpgradeLevel(s, owner, key)
+  return 1 + level * def.perLevel
+}
+
+// Apply next upgrade level (called when research completes)
+function applyUpgradeLevel(s: GameState, owner: Faction, key: string) {
+  ;(s as any)._upgLevels = (s as any)._upgLevels || {}
+  ;(s as any)._upgLevels[owner] = (s as any)._upgLevels[owner] || {}
+  const current = (s as any)._upgLevels[owner][key] || 0
+  ;(s as any)._upgLevels[owner][key] = current + 1
+  const def = UPGRADE_DEFS.find(d => d.key === key)
+  if (def) logEvent(s, 'build', `${def.name} → ур.${current + 1}`)
+  // Recompute energy if generator/refinery upgrade affects it
+  if (key === 'genOutput' || key === 'refineryRate') recomputeEnergy(s)
+}
+
+// Cost for upgrading to a specific level
+export function upgradeCost(key: string, targetLevel: number): number {
+  const def = UPGRADE_DEFS.find(d => d.key === key)
+  if (!def) return 999
+  return Math.round(def.baseCost * Math.pow(targetLevel, 1.5))
+}
+
+// Time for upgrading to a specific level
+export function upgradeTime(key: string, targetLevel: number): number {
+  const def = UPGRADE_DEFS.find(d => d.key === key)
+  if (!def) return 999
+  return Math.round(def.baseTime * Math.pow(targetLevel, 1.2))
+}
+
+// Check if a specific upgrade level is unlocked (tech requirements met)
+export function isUpgradeLevelUnlocked(s: GameState, owner: Faction, key: string, targetLevel: number): boolean {
+  const def = UPGRADE_DEFS.find(d => d.key === key)
   if (!def) return false
+  if (targetLevel <= 3) return true  // levels 1-3 always available
+  if (targetLevel <= 6) return isTechResearched(s, owner, def.tier1Tech)
+  return isTechResearched(s, owner, def.tier2Tech)  // levels 7-10
+}
+
+// Start upgrading a building to the next level
+export function startBuildingUpgrade(s: GameState, bld: Building, upgradeKey: string): boolean {
+  const def = UPGRADE_DEFS.find(d => d.key === upgradeKey)
+  if (!def) return false
+  if (bld.type !== def.building) return false
   if (bld.research) return false
   if (bld.hp < bld.maxHp) return false
   if (!hasPower(s, bld.owner)) return false
-  if (!isTechResearched(s, bld.owner, def.requiredTech)) return false
-  // Check not already applied
-  if (getUpgrade(s, bld.owner, upgradeId) > 1) return false
-  if (s.players[bld.owner].credits < def.cost) return false
-  s.players[bld.owner].credits -= def.cost
-  bld.research = { type: 'upg_' + upgradeId, progress: 0, totalTime: def.time }
+  const currentLevel = getUpgradeLevel(s, bld.owner, upgradeKey)
+  if (currentLevel >= def.maxLevel) return false
+  const targetLevel = currentLevel + 1
+  if (!isUpgradeLevelUnlocked(s, bld.owner, upgradeKey, targetLevel)) return false
+  const cost = upgradeCost(upgradeKey, targetLevel)
+  if (s.players[bld.owner].credits < cost) return false
+  s.players[bld.owner].credits -= cost
+  bld.research = { type: 'upg_' + upgradeKey, progress: 0, totalTime: upgradeTime(upgradeKey, targetLevel) }
   return true
 }
 
-function setUpgrade(s: GameState, owner: Faction, key: string, val: number) {
-  (s as any)._upgrades = (s as any)._upgrades || {}
-  ;(s as any)._upgrades[owner] = (s as any)._upgrades[owner] || {}
-  ;(s as any)._upgrades[owner][key] = val
-  logEvent(s, 'build', 'Улучшение применено: ' + (BUILDING_UPGRADES.find(u => u.id === key)?.name || key))
-}
-
-export function getUpgrade(s: GameState, owner: Faction, key: string): number {
-  return ((s as any)._upgrades?.[owner]?.[key]) || 1
-}
-
+// Keep old names for backward compat
 export function startResearch(s: GameState, bld: Building, researchId: string): boolean {
-  const def = RESEARCH.find(r => r.id === researchId)
-  if (!def || bld.type !== def.building) return false
-  if (bld.research) return false
-  if (bld.hp < bld.maxHp) return false  // must be fully built
-  if (s.players[bld.owner].credits < def.cost) return false
-  if (!hasPower(s, bld.owner)) return false
-  s.players[bld.owner].credits -= def.cost
-  bld.research = { type: researchId, progress: 0, totalTime: def.time }
-  return true
+  return startBuildingUpgrade(s, bld, researchId)
 }
-
 export function cancelResearch(s: GameState, bld: Building): boolean {
   if (!bld.research) return false
-  const def = RESEARCH.find(r => r.id === bld.research!.type)
-  if (def) s.players[bld.owner].credits += Math.floor(def.cost * 0.5)
+  // refund 50%
+  const rType = bld.research.type
+  if (rType.startsWith('upg_')) {
+    const key = rType.substring(4)
+    const lvl = getUpgradeLevel(s, bld.owner, key) + 1
+    s.players[bld.owner].credits += Math.floor(upgradeCost(key, lvl) * 0.5)
+  } else if (rType.startsWith('tech_')) {
+    const techId = rType.substring(5)
+    const def = TECHNOLOGIES.find(t => t.id === techId)
+    if (def) s.players[bld.owner].credits += Math.floor(def.cost * 0.5)
+  }
   bld.research = undefined
   return true
 }
@@ -403,29 +443,59 @@ export function createGame(width: number, height: number, terrain: number[], dif
   if (difficulty === 'medium') s.players.harkonnen.credits += 200
   if (difficulty === 'hard') { s.players.harkonnen.credits += 500 }
 
-  // place palaces at opposite corners (2x2 footprint)
-  const px1 = 3, py1 = Math.floor(height / 2) - 1
-  const px2 = width - 5, py2 = Math.floor(height / 2) - 1
-  for (const [bx, by, fac] of [[px1, py1, 'atreides'], [px2, py2, 'harkonnen']] as const) {
-    const fp = FOOTPRINT.palace
-    // clear footprint to SAND (walkable) — building blocks via tileHasBuilding, not terrain
+  // place palaces at RANDOM positions — minimum distance between bases,
+  // not on water/rock/mountains, and not near map edges.
+  // This makes each game start differently and the AI must scout to find
+  // the player (it can't assume "opposite corner").
+  const fp = FOOTPRINT.palace
+  const refFp = FOOTPRINT.refinery
+  const minBaseDist = Math.min(width, height) * 0.5  // at least half the map apart
+  const positions: { x: number; y: number }[] = []
+  const tryFindSpot = (): { x: number; y: number } | null => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const bx = 2 + Math.floor(Math.random() * (width - 6))
+      const by = 2 + Math.floor(Math.random() * (height - 6))
+      // Check terrain is buildable (sand/dune) for the palace footprint
+      let ok = true
+      for (let dy = 0; dy < fp.h && ok; dy++) {
+        for (let dx = 0; dx < fp.w && ok; dx++) {
+          const t = terrain[idx(bx + dx, by + dy, width)]
+          if (t !== 1 && t !== 2) ok = false  // not sand/dune
+        }
+      }
+      if (!ok) continue
+      // Check distance from existing bases
+      for (const p of positions) {
+        if (dist(bx, by, p.x, p.y) < minBaseDist) { ok = false; break }
+      }
+      if (!ok) continue
+      return { x: bx, y: by }
+    }
+    // fallback: opposite corners
+    return null
+  }
+  const atreidesSpot = tryFindSpot() || { x: 3, y: Math.floor(height / 2) - 1 }
+  positions.push(atreidesSpot)
+  const harkonnenSpot = tryFindSpot() || { x: width - 5, y: Math.floor(height / 2) - 1 }
+  positions.push(harkonnenSpot)
+  for (const [bx, by, fac] of [[atreidesSpot.x, atreidesSpot.y, 'atreides'], [harkonnenSpot.x, harkonnenSpot.y, 'harkonnen']] as const) {
+    // clear footprint + surrounding to SAND (walkable)
     for (let dy = 0; dy < fp.h; dy++) for (let dx = 0; dx < fp.w; dx++) {
       if (inBounds(bx + dx, by + dy, width, height)) terrain[idx(bx + dx, by + dy, width)] = 1
     }
     const palace = createBuilding('palace', s.nextId++, bx, by, fac)
     palace.hp = palace.maxHp  // fully built at start
     s.buildings.push(palace)
-    // start with a refinery (so harvester can unload immediately)
+    // start with a refinery adjacent to palace
     const refX = bx + fp.w + 1
     const refY = by
-    const refFp = FOOTPRINT.refinery
     for (let dy = 0; dy < refFp.h; dy++) for (let dx = 0; dx < refFp.w; dx++) {
       if (inBounds(refX + dx, refY + dy, width, height)) terrain[idx(refX + dx, refY + dy, width)] = 1
     }
     const refinery = createBuilding('refinery', s.nextId++, refX, refY, fac)
     refinery.hp = refinery.maxHp  // fully built
     s.buildings.push(refinery)
-    // start harvester below palace
+    // start harvester next to palace
     s.units.push(makeUnit(s, 'harvester', fac, bx + fp.w / 2, by + fp.h + 0.5))
   }
   recomputeEnergy(s)
@@ -434,6 +504,12 @@ export function createGame(width: number, height: number, terrain: number[], dif
 
 export function makeUnit(s: GameState, type: UnitType, owner: Faction, x: number, y: number): Unit {
   const u = createUnit(type, s.nextId++, x, y, owner)
+  // Apply unitHp upgrade (existing units created before upgrade keep their HP)
+  const hpMult = getUpgrade(s, owner, 'unitHp')
+  if (hpMult > 1) {
+    u.maxHp = Math.round(u.maxHp * hpMult)
+    u.hp = u.maxHp
+  }
   return u
 }
 
@@ -446,8 +522,13 @@ export function recomputeEnergy(s: GameState) {
       if (b.owner !== f) continue
       if (b.hp < b.maxHp) continue  // not built yet — no energy contribution/consumption
       const bt = b.type  // cache getter
-      if (bt === 'generator') max += CONFIG.generator.energyOutput * (b.level || 1)
+      if (bt === 'generator') max += CONFIG.generator.energyOutput * (b.level || 1) * getUpgrade(s, f, 'genOutput')
       else if (bt === 'palace') max += 6
+      else if (bt === 'refinery') {
+        // refinery base demand + extra for refineryRate upgrade levels
+        const rateLevel = getUpgradeLevel(s, f, 'refineryRate')
+        demand += (CONFIG[bt] as any).energy + rateLevel * 1  // +1 energy per refineryRate level
+      }
       else demand += (CONFIG[bt] as any).energy || 0
     }
     for (const u of s.units) {
@@ -537,6 +618,13 @@ export function placeBuilding(s: GameState, owner: Faction, type: BuildingType, 
   const cost = BUILD_COSTS[type] ?? 0
   s.players[owner].credits -= cost
   const b = createBuilding(type, s.nextId++, x, y, owner)
+  // Apply armorBld upgrade (new buildings get bonus HP)
+  const armorMult = getUpgrade(s, owner, 'armorBld')
+  if (armorMult > 1) {
+    b.maxHp = Math.round(b.maxHp * armorMult)
+    // building starts at 50% HP during construction; scale proportionally
+    b.hp = Math.round(b.maxHp * 0.5)
+  }
   s.buildings.push(b)
   recomputeEnergy(s)
   invalidatePathCache()  // building changes obstacle grid
@@ -645,10 +733,9 @@ function updateBuildings(s: GameState) {
           const def = TECHNOLOGIES.find(t => t.id === techId)
           logEvent(s, 'build', 'Технология исследована: ' + (def?.name || techId))
         } else if (rt.startsWith('upg_')) {
-          // Building upgrade complete
-          const upgId = rt.substring(4)
-          const def = BUILDING_UPGRADES.find(u => u.id === upgId)
-          if (def) def.apply(s, b.owner)
+          // Building upgrade complete — apply next level
+          const upgKey = rt.substring(4)
+          applyUpgradeLevel(s, b.owner, upgKey)
         } else if (rt.startsWith('gen_upgrade_')) {
           // Generator level upgrade complete
           b.level++
@@ -925,8 +1012,10 @@ function updateUnits(s: GameState) {
       } else if (u.state === 'harvest') {
         const d = dist(u.x, u.y, u.tx, u.ty)
         if (d < 0.8) {
+          // harvestSpeed upgrade reduces ticks needed per harvest cycle
+          const harvestThreshold = Math.max(2, Math.round(8 / getUpgrade(s, u.owner, 'harvestSpeed')))
           u.harvestTime++
-          if (u.harvestTime >= 8) {
+          if (u.harvestTime >= harvestThreshold) {
             u.harvestTime = 0
             const tx = Math.floor(u.tx), ty = Math.floor(u.ty)
             if (inBounds(tx, ty, s.width, s.height)) {
@@ -967,8 +1056,11 @@ function updateUnits(s: GameState) {
             continue
           }
           const refAny = ref as any
+          // Effective max capacity = base * refineryCap upgrade multiplier
+          const capMult = getUpgrade(s, u.owner, 'refineryCap')
+          const effectiveMax = refAny.baseMaxSpiceStock * capMult
           // Refinery full → wait here, retry next tick
-          if (refAny.spiceStock >= refAny.maxSpiceStock) {
+          if (refAny.spiceStock >= effectiveMax) {
             // log occasionally so player understands why harvester waits
             if (u.owner === 'atreides' && s.tick % 20 === 0) {
               logEvent(s, 'spice', 'Спайс-завод переполнен — ожидание')
@@ -977,7 +1069,7 @@ function updateUnits(s: GameState) {
           }
           // Unload a slice into the refinery stock
           const unloadRate = 8
-          const room = refAny.maxSpiceStock - refAny.spiceStock
+          const room = effectiveMax - refAny.spiceStock
           const unload = Math.min(harv.cargo, unloadRate, room)
           refAny.spiceStock += unload
           harv.cargo -= unload
@@ -1091,6 +1183,46 @@ function updateUnits(s: GameState) {
     }
     u.lastX = u.x
     u.lastY = u.y
+  }
+  // --- Harvester death: scatter 20-50% of cargo as spice tiles + leave stain ---
+  // This happens BEFORE filtering dead units, so we can read their cargo.
+  for (const u of s.units) {
+    if (u.hp > 0) continue
+    if (u.type !== 'harvester') continue
+    const harv = u as any
+    const cargo = harv.cargo || 0
+    if (cargo > 0) {
+      // 20-50% of accumulated cargo becomes spice tiles
+      const pct = 0.2 + Math.random() * 0.3  // 0.2..0.5
+      const spiceToDrop = Math.floor(cargo * pct)
+      // Each spice tile holds ~8 spice, so determine how many tiles to scatter
+      const tilesToScatter = Math.max(1, Math.min(6, Math.ceil(spiceToDrop / 8)))
+      const w = s.width, h = s.height
+      const cx = Math.floor(u.x), cy = Math.floor(u.y)
+      let scattered = 0
+      for (let attempt = 0; attempt < 12 && scattered < tilesToScatter; attempt++) {
+        const dx = Math.floor(Math.random() * 5) - 2  // -2..+2
+        const dy = Math.floor(Math.random() * 5) - 2
+        const tx = cx + dx, ty = cy + dy
+        if (tx < 0 || ty < 0 || tx >= w || ty >= h) continue
+        const ti = ty * w + tx
+        const t = s.terrain[ti]
+        // only place spice on sand/dune (walkable terrain), not on rock/water/buildings
+        if (t !== 1 && t !== 2 && t !== 5 && t !== 6) continue
+        // don't place on building footprint
+        if (s.buildings.some(b => tx >= b.x && tx < b.x + b.w && ty >= b.y && ty < b.y + b.h)) continue
+        // rich spice (6) if it was a big drop, regular (5) otherwise
+        s.terrain[ti] = scattered === 0 && spiceToDrop > 30 ? 6 : 5
+        scattered++
+      }
+      s.terrainVersion++
+      if (u.owner === 'atreides') {
+        logEvent(s, 'warn', `Доставщик уничтожен! Потеряно ${Math.round(cargo * (1 - pct))} спайса, ${scattered} тайлов спайса рассеяно`)
+      }
+    }
+    // Always leave a scorch mark / explosion at death location
+    spawnExplosion(s, u.x, u.y, 2, '#ff6020')
+    spawnExplosion(s, u.x, u.y, 1.5, '#ffaa30')
   }
   s.units = s.units.filter(u => u.hp > 0)
 }
@@ -1454,9 +1586,10 @@ function updateAI(s: GameState) {
   const factory = myBldgs.find(b => b.type === 'factory')
   if (factory && factory.queue.length === 0 && player.credits >= CONFIG.tank.cost) queueUnit(s, factory, 'tank')
 
-  // army orders
-  const playerPalace = s.buildings.find(b => b.owner === 'atreides' && b.type === 'palace')
-  const threat = s.units.filter(u => u.owner === 'atreides' && u.type !== 'harvester' && dist(u.x, u.y, palace.x, palace.y) < 8)
+  // army orders — AI does NOT cheat by reading player building positions.
+  // It maintains a "known enemies" list, discovered when its units explore.
+  // Idle units are sent to scout random unexplored directions until enemies found.
+  const threat = s.units.filter(u => u.owner === 'atreides' && u.type !== 'harvester' && dist(u.x, u.y, palace.x, palace.y) < 10)
   if (threat.length > 0 && army.length > 0) {
     // Defend: attack nearby threats near our base
     for (const a of army) {
@@ -1464,17 +1597,46 @@ function updateAI(s: GameState) {
         commandAttack(s, a, threat[0].id, false)
       }
     }
-  } else if (army.length >= (s.difficulty === 'hard' ? 4 : 6) && playerPalace) {
-    // Attack the player's palace.
-    // Re-issue attack orders even for units already in 'attack' state, because
-    // their previous target may have been destroyed or they may be stuck
-    // waiting. This keeps the army advancing toward the player.
-    for (const a of army) {
-      // Re-issue if idle, or if attacking but stuck (waitTicks high) or far
-      // from the palace and not making progress.
-      const farFromPalace = dist(a.x, a.y, playerPalace.x, playerPalace.y) > 6
-      if (a.state === 'idle' || (a.state === 'attack' && farFromPalace && (a.waitTicks || 0) > 5)) {
-        commandAttack(s, a, playerPalace.id, true)
+  } else if (army.length >= (s.difficulty === 'hard' ? 4 : 6)) {
+    // Discover player buildings via exploration (not cheating).
+    // AI "knows" about player buildings only if its units have been within
+    // vision range (8 tiles) of them. This simulates scouting.
+    const visionRange = 8
+    const knownPlayerBldgs = s.buildings.filter(b => {
+      if (b.owner !== 'atreides') return false
+      // Check if any AI unit is close enough to "see" this building
+      return s.units.some(u => u.owner === owner && u.type !== 'harvester' &&
+        dist(u.x, u.y, b.x + b.w / 2, b.y + b.h / 2) < visionRange)
+    })
+    if (knownPlayerBldgs.length > 0) {
+      // Attack! But spread targets — don't all rush the same building.
+      // Assign each unit to the nearest known building (creates natural spread).
+      for (const a of army) {
+        const farFromAny = knownPlayerBldgs.every(b => dist(a.x, a.y, b.x, b.y) > 4)
+        const stuck = (a.waitTicks || 0) > 5
+        if (a.state === 'idle' || (a.state === 'attack' && farFromAny && stuck)) {
+          // Pick nearest known building
+          let nearest = knownPlayerBldgs[0]
+          let nd = dist(a.x, a.y, nearest.x, nearest.y)
+          for (const b of knownPlayerBldgs) {
+            const d = dist(a.x, a.y, b.x, b.y)
+            if (d < nd) { nd = d; nearest = b }
+          }
+          commandAttack(s, a, nearest.id, true)
+        }
+      }
+    } else {
+      // Don't know where player is — send idle units to scout random directions.
+      // This makes the AI explore the map like a real player would.
+      for (const a of army) {
+        if (a.state !== 'idle') continue
+        // Pick a random unexplored direction (bias toward map center and beyond)
+        const angle = Math.random() * Math.PI * 2
+        const distScout = 15 + Math.random() * 20
+        const sx = Math.max(2, Math.min(s.width - 3, a.x + Math.cos(angle) * distScout))
+        const sy = Math.max(2, Math.min(s.height - 3, a.y + Math.sin(angle) * distScout))
+        a.tx = sx; a.ty = sy; a.state = 'move'
+        computePath(s, a)
       }
     }
   }

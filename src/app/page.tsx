@@ -25,9 +25,9 @@ import {
   FACTION_COLORS, type Faction, type BuildingType, type UnitType,
 } from '@/lib/tile-renderer'
 import {
-  createGame, tick, CONFIG, BUILD_COSTS, FOOTPRINT, TECHNOLOGIES, BUILDING_UPGRADES, type GameState, type Unit, type Building,
+  createGame, tick, CONFIG, BUILD_COSTS, FOOTPRINT, TECHNOLOGIES, BUILDING_UPGRADES, UPGRADE_DEFS, type GameState, type Unit, type Building,
   canBuild, placeBuilding, queueUnit, commandMove, commandAttack,
-  cancelQueueItem, startTechResearch, startBuildingUpgrade, isTechResearched, getUpgrade, upgradeGenerator, upgradeTurret,
+  cancelQueueItem, startTechResearch, startBuildingUpgrade, isTechResearched, getUpgrade, getUpgradeLevel, upgradeCost, upgradeTime, isUpgradeLevelUnlocked, upgradeGenerator, upgradeTurret,
   idx, isWalkable, isBuildable, buildingAt, dist, inBounds,
   pickUnitAt, pickBuildingAt, hasPower,
   typeRu, unitName, bldName, factionRu,
@@ -1414,106 +1414,128 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
                       </div>
                     )}
                     {/* TechLab: research technologies */}
+                    {/* ===== Level-based upgrade UI (works for ALL building types) ===== */}
+                    {selBld.hp >= selBld.maxHp && (() => {
+                      // Find upgrades applicable to this building type
+                      const applicable = UPGRADE_DEFS.filter(d => d.building === selBld.type)
+                      if (applicable.length === 0) return null
+                      // Is a research in progress?
+                      const researching = selBld.research
+                      const researchDef = researching?.type.startsWith('upg_')
+                        ? UPGRADE_DEFS.find(d => d.key === researching!.type.substring(4))
+                        : null
+                      return (
+                        <div className="space-y-1">
+                          <div className="text-[10px] text-cyan-400 uppercase">Улучшения (уровни 1-10):</div>
+                          {researching && researchDef ? (
+                            <div className="p-1.5 rounded bg-cyan-900/30">
+                              <div className="text-[11px] text-cyan-300">
+                                {researchDef.name} → ур.{getUpgradeLevel(s, 'atreides', researchDef.key) + 1}
+                              </div>
+                              <div className="h-1.5 bg-neutral-900 rounded overflow-hidden mt-1">
+                                <div className="h-full bg-cyan-500" style={{width: `${(researching.progress/researching.totalTime)*100}%`}}/>
+                              </div>
+                            </div>
+                          ) : researching ? (
+                            // Tech research in progress (techlab)
+                            <div className="p-1.5 rounded bg-purple-900/30">
+                              <div className="text-[11px] text-purple-300">
+                                {TECHNOLOGIES.find(t => 'tech_' + t.id === researching.type)?.name || 'Исследование...'}
+                              </div>
+                              <div className="h-1.5 bg-neutral-900 rounded overflow-hidden mt-1">
+                                <div className="h-full bg-purple-500" style={{width: `${(researching.progress/researching.totalTime)*100}%`}}/>
+                              </div>
+                            </div>
+                          ) : (
+                            applicable.map(def => {
+                              const currentLevel = getUpgradeLevel(s, 'atreides', def.key)
+                              const targetLevel = currentLevel + 1
+                              const maxed = currentLevel >= def.maxLevel
+                              const unlocked = isUpgradeLevelUnlocked(s, 'atreides', def.key, targetLevel)
+                              const cost = upgradeCost(def.key, targetLevel)
+                              const canAfford = s.players.atreides.credits >= cost
+                              const mult = getUpgrade(s, 'atreides', def.key)
+                              return (
+                                <div key={def.key} className={`p-1.5 rounded text-[11px] ${maxed ? 'bg-green-900/20' : unlocked ? (canAfford ? 'bg-neutral-700/60' : 'bg-neutral-800/60') : 'bg-neutral-900/60 opacity-60'}`}>
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-neutral-200">{def.name}</span>
+                                    <span className="font-mono text-[10px]">
+                                      {maxed ? <span className="text-green-400">MAX</span> : !unlocked ? <span className="text-neutral-600">🔒</span> : <span className="text-cyan-400">{cost}$</span>}
+                                    </span>
+                                  </div>
+                                  {/* Level bar 1-10 */}
+                                  <div className="flex gap-0.5 mt-1">
+                                    {Array.from({length: 10}, (_, i) => (
+                                      <div key={i} className={`h-1 flex-1 rounded-sm ${i < currentLevel ? 'bg-cyan-400' : i === currentLevel && !maxed && unlocked ? 'bg-cyan-700' : 'bg-neutral-700'}`}/>
+                                    ))}
+                                  </div>
+                                  <div className="flex justify-between mt-0.5">
+                                    <span className="text-[9px] text-neutral-500">ур.{currentLevel} · ×{mult.toFixed(2)}</span>
+                                    {!maxed && !unlocked && <span className="text-[9px] text-neutral-600">нужна технология</span>}
+                                  </div>
+                                  {!maxed && unlocked && (
+                                    <button
+                                      onClick={() => { startBuildingUpgrade(s, selBld, def.key) }}
+                                      disabled={!canAfford}
+                                      className={`w-full mt-1 h-7 rounded text-[10px] font-medium touch-manipulation ${canAfford ? 'bg-cyan-700 hover:bg-cyan-600 text-white' : 'bg-neutral-800 text-neutral-600'}`}>
+                                      → ур.{targetLevel} ({cost}$)
+                                    </button>
+                                  )}
+                                </div>
+                              )
+                            })
+                          )}
+                        </div>
+                      )
+                    })()}
+                    {/* ===== TechLab: research technologies (tier 1 + tier 2) ===== */}
                     {selBld.type === 'techlab' && selBld.hp >= selBld.maxHp && (
                       <div className="space-y-1">
                         <div className="text-[10px] text-purple-400 uppercase">Технологии:</div>
-                        {selBld.research ? (
-                          <div className="p-1.5 rounded bg-purple-900/30">
-                            <div className="text-[11px] text-purple-300">
-                              {selBld.research.type.startsWith('tech_') ? 'Технология: ' : 'Улучшение: '}
-                              {selBld.research.type.startsWith('tech_') ? TECHNOLOGIES.find(t => t.id === selBld.research!.type.substring(5))?.name : BUILDING_UPGRADES.find(u => u.id === selBld.research!.type.substring(4))?.name}
-                            </div>
-                            <div className="h-1.5 bg-neutral-900 rounded overflow-hidden mt-1">
-                              <div className="h-full bg-purple-500" style={{width: `${(selBld.research.progress/selBld.research.totalTime)*100}%`}}/>
-                            </div>
-                          </div>
-                        ) : (
-                          TECHNOLOGIES.map(tech => {
-                            const researched = isTechResearched(s, 'atreides', tech.id)
-                            const can = s.players.atreides.credits >= tech.cost && !researched
-                            return (
-                              <button key={tech.id} onClick={() => { if (startTechResearch(s, selBld, tech.id)) {} }}
-                                disabled={!can}
-                                className={`w-full text-left p-2 rounded text-[11px] transition-colors touch-manipulation ${researched ? 'bg-green-900/30 opacity-60' : can ? 'bg-neutral-700/60 hover:bg-purple-900/40' : 'bg-neutral-900 opacity-40'}`}>
-                                <div className="flex justify-between">
-                                  <span className={researched ? 'text-green-400' : 'text-neutral-200'}>{researched ? '✓ ' : ''}{tech.name}</span>
-                                  {!researched && <span className="text-purple-400 font-mono">{tech.cost}$</span>}
-                                </div>
-                                <div className="text-[9px] text-neutral-500">{tech.desc}</div>
-                              </button>
-                            )
-                          })
-                        )}
+                        {!selBld.research ? (
+                          <>
+                            <div className="text-[9px] text-neutral-500 mb-0.5">Уровень 1 (открывает улучшения 4-6):</div>
+                            {TECHNOLOGIES.filter(t => t.tier === 1).map(tech => {
+                              const researched = isTechResearched(s, 'atreides', tech.id)
+                              const can = s.players.atreides.credits >= tech.cost && !researched
+                              return (
+                                <button key={tech.id} onClick={() => { startTechResearch(s, selBld, tech.id) }}
+                                  disabled={!can}
+                                  className={`w-full text-left p-1.5 rounded text-[11px] transition-colors touch-manipulation ${researched ? 'bg-green-900/30 opacity-60' : can ? 'bg-neutral-700/60 hover:bg-purple-900/40' : 'bg-neutral-900 opacity-40'}`}>
+                                  <div className="flex justify-between">
+                                    <span className={researched ? 'text-green-400' : 'text-neutral-200'}>{researched ? '✓ ' : ''}{tech.name}</span>
+                                    {!researched && <span className="text-purple-400 font-mono">{tech.cost}$</span>}
+                                  </div>
+                                  <div className="text-[9px] text-neutral-500">{tech.desc}</div>
+                                </button>
+                              )
+                            })}
+                            <div className="text-[9px] text-neutral-500 mb-0.5 mt-1">Уровень 2 (открывает улучшения 7-10, требует все технологии ур.1):</div>
+                            {TECHNOLOGIES.filter(t => t.tier === 2).map(tech => {
+                              const researched = isTechResearched(s, 'atreides', tech.id)
+                              const tier1Researched = TECHNOLOGIES.filter(t => t.tier === 1).every(t => isTechResearched(s, 'atreides', t.id))
+                              const can = s.players.atreides.credits >= tech.cost && !researched && tier1Researched
+                              return (
+                                <button key={tech.id} onClick={() => { startTechResearch(s, selBld, tech.id) }}
+                                  disabled={!can}
+                                  className={`w-full text-left p-1.5 rounded text-[11px] transition-colors touch-manipulation ${researched ? 'bg-green-900/30 opacity-60' : can ? 'bg-neutral-700/60 hover:bg-purple-900/40' : 'bg-neutral-900 opacity-40'}`}>
+                                  <div className="flex justify-between">
+                                    <span className={researched ? 'text-green-400' : 'text-neutral-200'}>{researched ? '✓ ' : ''}{tech.name}</span>
+                                    {!researched && <span className="text-purple-400 font-mono">{tech.cost}$</span>}
+                                  </div>
+                                  <div className="text-[9px] text-neutral-500">{tier1Researched ? tech.desc : '🔒 Сначала исследуйте все технологии ур.1'}</div>
+                                </button>
+                              )
+                            })}
+                          </>
+                        ) : null}
                       </div>
                     )}
-                    {/* Building upgrades (require tech researched first) */}
-                    {selBld.type !== 'techlab' && selBld.hp >= selBld.maxHp && (
-                      <div className="space-y-1">
-                        <div className="text-[10px] text-cyan-400 uppercase">Улучшения:</div>
-                        {selBld.research && !selBld.research.type.startsWith('gen_upgrade') ? (
-                          <div className="p-1.5 rounded bg-cyan-900/30">
-                            <div className="text-[11px] text-cyan-300">{BUILDING_UPGRADES.find(u => u.id === selBld.research!.type.substring(4))?.name}</div>
-                            <div className="h-1.5 bg-neutral-900 rounded overflow-hidden mt-1">
-                              <div className="h-full bg-cyan-500" style={{width: `${(selBld.research.progress/selBld.research.totalTime)*100}%`}}/>
-                            </div>
-                          </div>
-                        ) : (
-                          BUILDING_UPGRADES.filter(u => {
-                            // Show upgrades for this building type that are unlocked but not yet applied
-                            const tech = TECHNOLOGIES.find(t => t.unlocks.some(un => un.upgradeId === u.id))
-                            if (!tech) return false
-                            const unlocked = isTechResearched(s, 'atreides', tech.id)
-                            if (!unlocked) return false
-                            // Check if applies to this building
-                            const unlockEntry = tech.unlocks.find(un => un.upgradeId === u.id)
-                            if (unlockEntry?.building !== selBld.type) return false
-                            // Check not already applied
-                            if (getUpgrade(s, 'atreides', u.id) > 1) return false
-                            return true
-                          }).map(u => (
-                            <button key={u.id} onClick={() => { if (startBuildingUpgrade(s, selBld, u.id)) {} }}
-                              disabled={s.players.atreides.credits < u.cost}
-                              className={`w-full text-left p-2 rounded text-[11px] transition-colors touch-manipulation ${s.players.atreides.credits >= u.cost ? 'bg-neutral-700/60 hover:bg-cyan-900/40' : 'bg-neutral-900 opacity-40'}`}>
-                              <div className="flex justify-between">
-                                <span className="text-neutral-200">{u.name}</span>
-                                <span className="text-cyan-400 font-mono">{u.cost}$</span>
-                              </div>
-                              <div className="text-[9px] text-neutral-500">{u.desc}</div>
-                            </button>
-                          ))
-                        )}
-                        {BUILDING_UPGRADES.filter(u => {
-                          const tech = TECHNOLOGIES.find(t => t.unlocks.some(un => un.upgradeId === u.id))
-                          if (!tech) return false
-                          const unlockEntry = tech.unlocks.find(un => un.upgradeId === u.id)
-                          return unlockEntry?.building === selBld.type && !isTechResearched(s, 'atreides', tech.id) && getUpgrade(s, 'atreides', u.id) <= 1
-                        }).length > 0 && (
-                          <div className="text-[9px] text-neutral-600 italic">🔒 Исследуйте технологии в Центре исследований</div>
-                        )}
-                      </div>
-                    )}
+                    {/* ===== Building-specific info panels ===== */}
                     {selBld.type === 'generator' && (
-                      <>
-                        <div className="text-xs text-cyan-400 flex items-center gap-1">
-                          <Zap className="w-3 h-3"/> Производит: +{CONFIG.generator.energyOutput * selBld.level} энергии (ур. {selBld.level})
-                        </div>
-                        {selBld.level < 3 && selBld.hp >= selBld.maxHp && !selBld.research && (
-                          <Button size="sm" className="w-full h-9 bg-cyan-700 hover:bg-cyan-600 touch-manipulation"
-                            disabled={s.players.atreides.credits < CONFIG.generator.upgradeCost * selBld.level}
-                            onClick={() => {
-                            }}>
-                            <Zap className="w-3 h-3 mr-1"/> Улучшить → ур.{selBld.level + 1} ({CONFIG.generator.upgradeCost * selBld.level}$)
-                          </Button>
-                        )}
-                        {selBld.research && (
-                          <div className="p-1.5 rounded bg-cyan-900/30">
-                            <div className="text-[11px] text-cyan-300">Улучшение до ур.{selBld.level + 1}...</div>
-                            <div className="h-1.5 bg-neutral-900 rounded overflow-hidden mt-1">
-                              <div className="h-full bg-cyan-500" style={{width: `${(selBld.research.progress/selBld.research.totalTime)*100}%`}}/>
-                            </div>
-                          </div>
-                        )}
-                      </>
+                      <div className="text-xs text-cyan-400 flex items-center gap-1">
+                        <Zap className="w-3 h-3"/> Производит: +{Math.round(CONFIG.generator.energyOutput * selBld.level * getUpgrade(s, 'atreides', 'genOutput'))} энергии
+                      </div>
                     )}
                     {selBld.type === 'radar' && (
                       <div className="text-xs text-green-400 space-y-0.5">
@@ -1523,16 +1545,19 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
                     )}
                     {selBld.type === 'techlab' && (
                       <div className="text-xs text-purple-400 space-y-0.5">
-                        <div className="flex items-center gap-1">🔬 Центр исследований (ур.{selBld.level})</div>
-                        <div className="text-[10px] text-neutral-500">Исследования: генераторы, добыча, броня. Уровни открывают новые возможности.</div>
+                        <div className="flex items-center gap-1">🔬 Центр исследований</div>
+                        <div className="text-[10px] text-neutral-500">Исследуйте технологии, затем улучшайте здания до ур.10</div>
                       </div>
                     )}
                     {selBld.type === 'refinery' && (() => {
                       const ref = selBld as any
                       const stock = ref.spiceStock ?? 0
-                      const max = ref.maxSpiceStock ?? 210
+                      const capMult = getUpgrade(s, 'atreides', 'refineryCap')
+                      const rateMult = getUpgrade(s, 'atreides', 'refineryRate')
+                      const baseMax = ref.baseMaxSpiceStock ?? 210
+                      const max = Math.round(baseMax * capMult)
                       const pct = max > 0 ? Math.min(100, Math.round((stock / max) * 100)) : 0
-                      const status = pct >= 100 ? 'Переполнен — ждите' : pct > 50 ? 'Перерабатывает...' : stock > 0 ? 'Перерабатывает...' : 'Ожидает спайс'
+                      const status = pct >= 100 ? 'Переполнен — ждите' : stock > 0 ? 'Перерабатывает...' : 'Ожидает спайс'
                       const statusColor = pct >= 100 ? 'text-red-400' : stock > 0 ? 'text-emerald-400' : 'text-neutral-500'
                       return (
                         <div className="text-xs space-y-1.5">
@@ -1546,61 +1571,33 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
                               <span>{Math.round(stock)} / {max}</span>
                             </div>
                             <div className="h-2 bg-neutral-900 rounded overflow-hidden ring-1 ring-neutral-700">
-                              <div
-                                className="h-full transition-all duration-200"
-                                style={{
-                                  width: `${pct}%`,
-                                  background: pct >= 100
-                                    ? 'linear-gradient(90deg,#f59e0b,#ef4444)'
-                                    : 'linear-gradient(90deg,#f97316,#fbbf24)'
-                                }}
-                              />
+                              <div className="h-full transition-all duration-200" style={{ width: `${pct}%`, background: pct >= 100 ? 'linear-gradient(90deg,#f59e0b,#ef4444)' : 'linear-gradient(90deg,#f97316,#fbbf24)' }} />
                             </div>
                           </div>
                           <div className="text-[10px] text-neutral-500">
-                            Доставщики разгружаются здесь. Завод постепенно перерабатывает спайс в кредиты.
+                            Вместимость ×{capMult.toFixed(1)} · Скорость ×{rateMult.toFixed(1)}
                           </div>
                         </div>
                       )
                     })()}
-                    {selBld.type === 'turret' && (
-                      <>
-                        {(() => {
-                          const tier = selBld.level || 1
-                          const tierName = tier === 3 ? 'Лазер' : tier === 2 ? 'Бронебойные пули' : 'Пулемёт'
-                          const tierColor = tier === 3 ? 'text-cyan-400' : tier === 2 ? 'text-orange-400' : 'text-yellow-400'
-                          const tierDmgMult = tier === 3 ? 2.5 : tier === 2 ? 1.5 : 1.0
-                          const tierRangeMult = tier === 3 ? 1.35 : tier === 2 ? 1.10 : 1.0
-                          const dmg = (CONFIG.turret.dmg * getUpgrade(s, 'atreides', 'turretDmg') * tierDmgMult)
-                          const range = (CONFIG.turret.range * getUpgrade(s, 'atreides', 'turretRange') * tierRangeMult)
-                          return (
-                            <div className="text-xs space-y-0.5">
-                              <div className="flex items-center gap-1">
-                                <span className="text-neutral-500">Уровень {tier}:</span>
-                                <span className={`font-medium ${tierColor}`}>{tierName}</span>
-                              </div>
-                              <div className="text-neutral-400">Радиус: {range.toFixed(1)} · Урон: {dmg.toFixed(0)}</div>
-                            </div>
-                          )
-                        })()}
-                        {selBld.level < 3 && selBld.hp >= selBld.maxHp && !selBld.research && (
-                          <Button size="sm" className="w-full h-9 bg-amber-700 hover:bg-amber-600 touch-manipulation"
-                            disabled={s.players.atreides.credits < CONFIG.turret.upgradeCost * selBld.level}
-                            onClick={() => {
-                            }}>
-                            <ChevronUp className="w-3 h-3 mr-1"/> Улучшить → ур.{selBld.level + 1} ({CONFIG.turret.upgradeCost * selBld.level}$)
-                          </Button>
-                        )}
-                        {selBld.research && selBld.research.type.startsWith('turret_upgrade') && (
-                          <div className="p-1.5 rounded bg-amber-900/30">
-                            <div className="text-[11px] text-amber-300">Улучшение до ур.{selBld.level + 1}...</div>
-                            <div className="h-1.5 bg-neutral-900 rounded overflow-hidden mt-1">
-                              <div className="h-full bg-amber-500" style={{width: `${(selBld.research.progress/selBld.research.totalTime)*100}%`}}/>
-                            </div>
+                    {selBld.type === 'turret' && (() => {
+                      const tier = selBld.level || 1
+                      const tierName = tier === 3 ? 'Лазер' : tier === 2 ? 'Бронебойные пули' : 'Пулемёт'
+                      const tierColor = tier === 3 ? 'text-cyan-400' : tier === 2 ? 'text-orange-400' : 'text-yellow-400'
+                      const tierDmgMult = tier === 3 ? 2.5 : tier === 2 ? 1.5 : 1.0
+                      const tierRangeMult = tier === 3 ? 1.35 : tier === 2 ? 1.10 : 1.0
+                      const dmg = (CONFIG.turret.dmg * getUpgrade(s, 'atreides', 'turretDmg') * tierDmgMult)
+                      const range = (CONFIG.turret.range * getUpgrade(s, 'atreides', 'turretRange') * tierRangeMult)
+                      return (
+                        <div className="text-xs space-y-0.5">
+                          <div className="flex items-center gap-1">
+                            <span className="text-neutral-500">Тир {tier}:</span>
+                            <span className={`font-medium ${tierColor}`}>{tierName}</span>
                           </div>
-                        )}
-                      </>
-                    )}
+                          <div className="text-neutral-400">Радиус: {range.toFixed(1)} · Урон: {dmg.toFixed(0)}</div>
+                        </div>
+                      )
+                    })()}
                   </div>
                 ) : (
                   <div className="p-2.5 rounded-lg bg-neutral-800/40 text-xs text-neutral-500 text-center">Ничего не выбрано</div>
