@@ -128,8 +128,12 @@ export function clearTerrainCache() {
   sandBaseCache.clear()
 }
 
-function getTerrainBase(terrain: number[], mapW: number, mapH: number, version: number): HTMLCanvasElement {
-  const key = `${mapW}x${mapH}-v${version}`
+// NOTE: base layer is STATIC — it does NOT change when spice is harvested.
+// Spice tiles (5, 6) are normalized to sand (1) here; their orange tint is
+// drawn dynamically by drawSpiceGlow as a feature overlay. This way the
+// 469ms per-pixel fbm regeneration never happens during gameplay.
+function getTerrainBase(terrain: number[], mapW: number, mapH: number): HTMLCanvasElement {
+  const key = `${mapW}x${mapH}`
   let c = terrainBaseCache.get(key)
   if (c) return c
   const scale = 2
@@ -144,7 +148,7 @@ function getTerrainBase(terrain: number[], mapW: number, mapH: number, version: 
   // color function for each terrain type at world coords (continuous noise)
   const typeColor = (t: number, wx: number, wy: number): [number, number, number] => {
     if (t === 0) return [8, 6, 4]
-    if (t === 1 || t === 2 || t === 5 || t === 6) {
+    if (t === 1 || t === 2) {
       const n = fbm(wx * 0.35, wy * 0.35, 4)
       const n2 = fbm(wx * 1.2 + 100, wy * 1.2 + 100, 2)
       const tn = Math.max(0, Math.min(1, n / 0.7))
@@ -152,8 +156,6 @@ function getTerrainBase(terrain: number[], mapW: number, mapH: number, version: 
       let r = 195 + tn * 45 + (tn2 - 0.5) * 12
       let g = 145 + tn * 38 + (tn2 - 0.5) * 10
       let b = 68 + tn * 27 + (tn2 - 0.5) * 6
-      if (t === 5) { r = r * 0.7 + 232 * 0.3; g = g * 0.7 + 93 * 0.3; b = b * 0.7 + 47 * 0.3 }
-      else if (t === 6) { r = r * 0.6 + 200 * 0.4; g = g * 0.6 + 60 * 0.4; b = b * 0.6 + 30 * 0.4 }
       if (t === 2) { r *= 0.88; g *= 0.86; b *= 0.82 }
       return [r, g, b]
     }
@@ -175,9 +177,14 @@ function getTerrainBase(terrain: number[], mapW: number, mapH: number, version: 
     return [8, 6, 4]
   }
 
+  // Normalize spice (5, 6) → sand (1) so the base layer doesn't change
+  // when harvesters deplete spice. Spice visuals are in the overlay layer.
   const typeAt = (wx: number, wy: number): number => {
     const tx = Math.floor(wx), ty = Math.floor(wy)
-    return (tx >= 0 && ty >= 0 && tx < mapW && ty < mapH) ? terrain[ty * mapW + tx] : 0
+    if (tx < 0 || ty < 0 || tx >= mapW || ty >= mapH) return 0
+    const t = terrain[ty * mapW + tx]
+    if (t === 5 || t === 6) return 1
+    return t
   }
 
   for (let y = 0; y < h; y++) {
@@ -389,8 +396,9 @@ export function drawTerrainLayer(
   animPhase: number,
   version = 0,
 ) {
-  // 1. continuous terrain base — ALL types per-pixel noise, truly seamless
-  const base = getTerrainBase(terrain, w, h, version)
+  // 1. static terrain base — generated once, never invalidated during gameplay
+  void version  // kept for API compatibility, no longer used for caching
+  const base = getTerrainBase(terrain, w, h)
   ctx.imageSmoothingEnabled = true
   ctx.drawImage(base, 0, 0, w * TILE_SIZE, h * TILE_SIZE)
   // 2. per-tile feature overlays (semi-transparent, sand base shows through)

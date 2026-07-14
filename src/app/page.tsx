@@ -970,8 +970,17 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
             }
           }
         }
-        // buildings
+        // buildings — viewport culling (skip off-screen for ~3× fewer draw calls)
+        const vMargin = 2  // tiles of margin for smooth panning
+        const vMinTx = -p.x / (z * TILE_SIZE) - vMargin
+        const vMaxTx = (wrapW - p.x) / (z * TILE_SIZE) + vMargin
+        const vMinTy = -p.y / (z * TILE_SIZE) - vMargin
+        const vMaxTy = (wrapH - p.y) / (z * TILE_SIZE) + vMargin
+        const inView = (tx: number, ty: number, tw = 1, th = 1) =>
+          tx + tw >= vMinTx && tx <= vMaxTx && ty + th >= vMinTy && ty <= vMaxTy
+
         for (const b of s.buildings) {
+          if (!inView(b.x, b.y, b.w, b.h)) continue
           drawBuilding(ctx, b.type, b.owner, b.x*TILE_SIZE, b.y*TILE_SIZE, b.w, b.h, b.hp, b.maxHp, hasPower(s, b.owner), tNow, b.level || 1)
           if (b.hp < b.maxHp) drawHealthBar(ctx, b.x*TILE_SIZE+b.w*TILE_SIZE/2, b.y*TILE_SIZE-2, b.w*TILE_SIZE-4, b.hp/b.maxHp)
           // production indicator
@@ -1009,8 +1018,9 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
             drawMoveMarker(ctx, u.tx, u.ty, u.owner==='atreides'?'#22c55e':'#ef4444')
           }
         }
-        // units (with bob animation for moving units)
+        // units (with bob animation for moving units) — viewport culling
         for (const u of s.units) {
+          if (!inView(u.x, u.y)) continue
           const moving = u.state === 'move' || u.state === 'attack' || u.state === 'harvest' || u.state === 'return'
           const bob = moving ? Math.sin(tNow * 6 + u.id) * 1 : 0
           drawUnit(ctx, u.type, u.owner, u.x*TILE_SIZE, u.y*TILE_SIZE, bob, u.facing, tNow, u.state)
@@ -1023,20 +1033,24 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
         }
         // worms (with subtle wiggle + HP bar if damaged)
         for (const w of s.worms) {
+          if (!inView(w.x, w.y)) continue
           const angle = Math.atan2(w.y - w.ty, w.x - w.tx) + Math.sin(tNow * 3 + w.id) * 0.15
           drawWorm(ctx, w.x*TILE_SIZE, w.y*TILE_SIZE, angle)
           if (w.hp < w.maxHp) drawHealthBar(ctx, w.x*TILE_SIZE, w.y*TILE_SIZE-TILE_SIZE/2-2, TILE_SIZE-4, w.hp/w.maxHp)
         }
         // projectiles
         for (const p of s.projectiles) {
+          if (!inView(p.x, p.y)) continue
           drawProjectile(ctx, p.x*TILE_SIZE, p.y*TILE_SIZE, p.sx*TILE_SIZE, p.sy*TILE_SIZE, p.color, !!p.beam)
         }
         // muzzle flashes
         for (const f of s.flashes) {
+          if (!inView(f.x, f.y)) continue
           drawMuzzleFlash(ctx, f.x*TILE_SIZE, f.y*TILE_SIZE, f.frame)
         }
         // explosions
         for (const e of s.explosions) {
+          if (!inView(e.x, e.y)) continue
           drawExplosion(ctx, e.x*TILE_SIZE, e.y*TILE_SIZE, e.frame, e.maxFrame, e.size, e.color)
         }
         // fog of war — cached, update every 5 ticks (not every frame)
