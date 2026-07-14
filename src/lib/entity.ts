@@ -386,6 +386,33 @@ export class Refinery extends Building implements IPowerConsumer {
   w = 2; h = 2
   get type() { return 'refinery' }
   energyDemand(): number { return 2 }
+
+  // Spice storage. Harvesters unload raw spice here; the refinery slowly
+  // refines it into credits. Capacity = 3.5 × harvester maxCargo (= 210).
+  // While the stock is full, harvesters wait at the unload point.
+  spiceStock: number = 0
+  maxSpiceStock: number = 210   // 3.5 × 60 (harvester maxCargo)
+  // Refining rate: spice units converted to credits per tick.
+  // Harvester unloads at 8/tick (80/s), refinery refines at 0.3/tick (3/s).
+  // → a full load (60) takes ~20s to refine, so stock accumulates visibly
+  // and the 210 buffer actually fills up if multiple harvesters queue.
+  refineRate: number = 0.3
+
+  update(s: GameState): void {
+    super.update(s)
+    if (this.hp < this.maxHp) return  // not built yet
+    if (this.spiceStock <= 0) return
+    // Refine a small slice each tick → credits
+    const convert = Math.min(this.spiceStock, this.refineRate)
+    this.spiceStock -= convert
+    const credits = Math.round(convert * 5)
+    s.players[this.owner].credits += credits
+    if (this.owner === 'atreides' && credits > 0 && s.tick % 6 === 0) {
+      // log occasionally to avoid spam
+      s.events.unshift({ id: s.nextId++, tick: s.tick, type: 'spice', text: `+${credits}$ (переработка спайса)` })
+      if (s.events.length > 12) s.events.pop()
+    }
+  }
 }
 
 export class Radar extends Building implements IVision, IPowerConsumer {

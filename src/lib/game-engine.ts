@@ -629,6 +629,8 @@ function updateBuildings(s: GameState) {
       b.hp = Math.min(b.maxHp, b.hp + 2)
       continue  // under construction — no functions yet
     }
+    // Polymorphic building update (e.g. refinery refines spice stock → credits)
+    try { (b as BuildingClass).update(s) } catch (e) { /* ignore */ }
     // research processing (only after built)
     if (b.research) {
       b.research.progress++
@@ -937,17 +939,35 @@ function updateUnits(s: GameState) {
           followPath(s, u, speed)
         }
       } else if (u.state === 'return') {
-        // Move toward unload point, unload when close
+        // Move toward unload point, unload when close.
+        // Unload INTO the refinery's spiceStock (not directly to credits);
+        // the refinery refines stock → credits over time (see Refinery.update).
         const d = dist(u.x, u.y, u.tx, u.ty)
         if (d < 1.5) {
-          // Close enough — unload gradually
+          // Find the refinery we're unloading into (nearest refinery to tx,ty)
+          const ref = findNearestRefinery(s, u.tx, u.ty, u.owner)
+          if (!ref || ref.hp < ref.maxHp) {
+            // refinery gone / under construction → go idle, try again later
+            u.state = 'idle'
+            continue
+          }
+          const refAny = ref as any
+          // Refinery full → wait here, retry next tick
+          if (refAny.spiceStock >= refAny.maxSpiceStock) {
+            // log occasionally so player understands why harvester waits
+            if (u.owner === 'atreides' && s.tick % 20 === 0) {
+              logEvent(s, 'spice', 'Спайс-завод переполнен — ожидание')
+            }
+            continue
+          }
+          // Unload a slice into the refinery stock
           const unloadRate = 8
-          const unload = Math.min(harv.cargo, unloadRate)
-          const credits = unload * 5
+          const room = refAny.maxSpiceStock - refAny.spiceStock
+          const unload = Math.min(harv.cargo, unloadRate, room)
+          refAny.spiceStock += unload
           harv.cargo -= unload
-          s.players[u.owner].credits += credits
-          if (u.owner === 'atreides' && credits > 0 && s.tick % 4 === 0) {
-            logEvent(s, 'spice', `+${credits}$ (переработка)`)
+          if (u.owner === 'atreides' && unload > 0 && s.tick % 4 === 0) {
+            logEvent(s, 'spice', `Разгрузка: +${Math.round(unload)} спайса`)
           }
           if (harv.cargo <= 0) {
             harv.cargo = 0

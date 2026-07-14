@@ -980,6 +980,26 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
             ctx.fillStyle = '#000'; ctx.fillRect(b.x*TILE_SIZE+2, b.y*TILE_SIZE+b.h*TILE_SIZE-6, b.w*TILE_SIZE-4, 4)
             ctx.fillStyle = '#22c55e'; ctx.fillRect(b.x*TILE_SIZE+2, b.y*TILE_SIZE+b.h*TILE_SIZE-6, (b.w*TILE_SIZE-4)*(q.progress/CONFIG[q.type].buildTime), 4)
           }
+          // refinery spice stock indicator (top bar — orange)
+          if (b.type === 'refinery') {
+            const ref = b as any
+            const stock = ref.spiceStock ?? 0
+            const max = ref.maxSpiceStock ?? 210
+            if (max > 0) {
+              const pct = Math.min(1, stock / max)
+              const barW = b.w * TILE_SIZE - 4
+              const barX = b.x * TILE_SIZE + 2
+              const barY = b.y * TILE_SIZE + 2
+              ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(barX, barY, barW, 4)
+              // color shifts amber→red as it fills
+              const r = 249, g = Math.round(115 + (1 - pct) * 40), bl = Math.round(22 + (1 - pct) * 20)
+              ctx.fillStyle = pct >= 1 ? '#ef4444' : `rgb(${r},${g},${bl})`
+              ctx.fillRect(barX, barY, barW * pct, 4)
+              // subtle white outline
+              ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1
+              ctx.strokeRect(barX + 0.5, barY + 0.5, barW - 1, 3)
+            }
+          }
         }
         // move markers for selected
         const sel = selectedRef.current
@@ -1454,12 +1474,42 @@ function GameScreen({ difficulty, terrain, w, h, onExit, isFullscreen, toggleFul
                         <div className="text-[10px] text-neutral-500">Исследования: генераторы, добыча, броня. Уровни открывают новые возможности.</div>
                       </div>
                     )}
-                    {selBld.type === 'refinery' && (
-                      <div className="text-xs text-orange-400 space-y-0.5">
-                        <div>🏭 Переработка спайса → кредиты</div>
-                        <div className="text-[10px] text-neutral-500">Доставщики разгружаются ТОЛЬКО здесь.</div>
-                      </div>
-                    )}
+                    {selBld.type === 'refinery' && (() => {
+                      const ref = selBld as any
+                      const stock = ref.spiceStock ?? 0
+                      const max = ref.maxSpiceStock ?? 210
+                      const pct = max > 0 ? Math.min(100, Math.round((stock / max) * 100)) : 0
+                      const status = pct >= 100 ? 'Переполнен — ждите' : pct > 50 ? 'Перерабатывает...' : stock > 0 ? 'Перерабатывает...' : 'Ожидает спайс'
+                      const statusColor = pct >= 100 ? 'text-red-400' : stock > 0 ? 'text-emerald-400' : 'text-neutral-500'
+                      return (
+                        <div className="text-xs space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-orange-400 font-medium">🏭 Спайс-завод</span>
+                            <span className={`text-[10px] ${statusColor}`}>{status}</span>
+                          </div>
+                          <div>
+                            <div className="flex items-center justify-between text-[10px] text-neutral-400 mb-0.5">
+                              <span>Склад спайса</span>
+                              <span>{Math.round(stock)} / {max}</span>
+                            </div>
+                            <div className="h-2 bg-neutral-900 rounded overflow-hidden ring-1 ring-neutral-700">
+                              <div
+                                className="h-full transition-all duration-200"
+                                style={{
+                                  width: `${pct}%`,
+                                  background: pct >= 100
+                                    ? 'linear-gradient(90deg,#f59e0b,#ef4444)'
+                                    : 'linear-gradient(90deg,#f97316,#fbbf24)'
+                                }}
+                              />
+                            </div>
+                          </div>
+                          <div className="text-[10px] text-neutral-500">
+                            Доставщики разгружаются здесь. Завод постепенно перерабатывает спайс в кредиты.
+                          </div>
+                        </div>
+                      )
+                    })()}
                     {selBld.type === 'turret' && (
                       <>
                         {(() => {
